@@ -146,8 +146,12 @@ def _build_appimage(dist_dir: str) -> None:
             '  echo "WAYLAND_DISPLAY=${WAYLAND_DISPLAY}"\n'
             '  echo "PYSTRAY_BACKEND=${PYSTRAY_BACKEND}"\n'
             '  echo "XDG_DATA_DIRS=${XDG_DATA_DIRS}"\n'
+            '  echo "APPIMAGE=${APPIMAGE}"\n'
             '} >> "${LOG}" 2>&1\n'
             '\n'
+            '# Fallback: if FUSE is unavailable (e.g. running extracted), this\n'
+            '# log entry is written directly.  Users on systems that still lack\n'
+            '# FUSE support can run: APPIMAGE_EXTRACT_AND_RUN=1 ./Iconic*.AppImage\n'
             'exec "${BIN}/iconic-filer" "$@"\n'
         )
     os.chmod(apprun_path, 0o755)
@@ -192,10 +196,22 @@ def _build_appimage(dist_dir: str) -> None:
 
     out_appimage = os.path.join(dist_dir, "IconicFiler-x86_64.AppImage")
     env = dict(os.environ, ARCH="x86_64")
-    subprocess.check_call(
-        [appimagetool, app_dir, out_appimage],
-        env=env,
-    )
+
+    # Use the type2-runtime when available (supports both libfuse2 and libfuse3
+    # via squashfuse fallback — required on Fedora 40+ / Bazzite which ship only
+    # libfuse3 and no longer provide the legacy libfuse.so.2).
+    appimage_cmd = [appimagetool]
+    runtime_env = os.environ.get("APPIMAGE_RUNTIME")
+    if runtime_env:
+        runtime_path = os.path.abspath(runtime_env)
+        if os.path.isfile(runtime_path) and os.access(runtime_path, os.X_OK):
+            appimage_cmd.extend(["--runtime-file", runtime_path])
+            print(f"Using type2-runtime: {runtime_path}")
+        else:
+            print(f"WARNING: APPIMAGE_RUNTIME={runtime_env!r} not found or not executable")
+    appimage_cmd.extend([app_dir, out_appimage])
+
+    subprocess.check_call(appimage_cmd, env=env)
     print(f"\nAppImage built: {out_appimage}")
 
 
