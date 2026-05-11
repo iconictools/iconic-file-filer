@@ -113,12 +113,25 @@ jobs:
             -O appimagetool
           chmod +x appimagetool
 
+      - name: Download AppImage type2-runtime (libfuse3 / Fedora / Bazzite support)
+        if: runner.os == 'Linux'
+        run: |
+          # The AppImageKit runtime requires libfuse2, which is absent on Fedora 40+
+          # and Bazzite.  The type2-runtime from AppImage/type2-runtime falls back to
+          # squashfuse when libfuse2 is not available, making AppImages work on both
+          # libfuse2 systems (Ubuntu/Debian) and libfuse3-only systems (Fedora/Bazzite).
+          wget -q \
+            https://github.com/AppImage/type2-runtime/releases/download/continuous/runtime-x86_64 \
+            -O appimage-runtime
+          chmod +x appimage-runtime
+
       - name: Build AppImage (Linux)
         if: runner.os == 'Linux'
         run: python build.py --appimage
         env:
           ARCH: x86_64
           APPIMAGETOOL: ${{ github.workspace }}/appimagetool
+          APPIMAGE_RUNTIME: ${{ github.workspace }}/appimage-runtime
 
       - name: Rename AppImage for release
         if: runner.os == 'Linux'

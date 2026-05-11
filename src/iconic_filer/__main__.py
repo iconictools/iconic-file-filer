@@ -98,7 +98,6 @@ def main(argv: list[str] | None = None) -> None:
             )
 
     from iconic_filer.config import Config
-    from iconic_filer.app import App
 
     config = Config(args.config)
 
@@ -165,8 +164,34 @@ def main(argv: list[str] | None = None) -> None:
                 return  # second instance exits after delegating
 
     # ── Normal startup ────────────────────────────────────────────────
-    app = App(config=config)
-    app.run()
+    # Wrap the entire startup in a try/except so that fatal errors (e.g.
+    # pystray failing to import, no display, missing libraries in a bundle)
+    # are surfaced as a visible error dialog rather than silently disappearing
+    # when the app is launched without a terminal (AppImage / double-click).
+    try:
+        from iconic_filer.app import App
+        app = App(config=config)
+        app.run()
+    except Exception as exc:  # noqa: BLE001
+        _log = logging.getLogger(__name__)
+        _log.exception("Fatal startup error: %s", exc)
+        # Best-effort: show a visible error dialog.
+        try:
+            import tkinter as _tk
+            from tkinter import messagebox as _mb
+            _root = _tk.Tk()
+            _root.withdraw()
+            _mb.showerror(
+                "Iconic File Filer — Fatal error",
+                f"The application failed to start:\n\n{exc}\n\n"
+                "Check ~/.iconic-filer/iconic-filer.log for details.\n\n"
+                "On Linux, ensure DISPLAY is set (XWayland must be running) "
+                "and that python3-xlib is installed.",
+            )
+            _root.destroy()
+        except Exception:
+            pass
+        raise
 
 
 if __name__ == "__main__":

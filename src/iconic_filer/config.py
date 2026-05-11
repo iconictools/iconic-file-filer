@@ -363,7 +363,7 @@ class Config:
     @property
     def rename_patterns(self) -> list[dict[str, Any]]:
         """Return the list of rename pattern dicts."""
-        return self._data.get("rename_patterns", [])
+        return self._data.setdefault("rename_patterns", [])
 
     def get_rename_pattern(self, ext: str) -> str | None:
         """Return the rename pattern string for *ext*, or *None*."""

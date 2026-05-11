@@ -39,6 +39,13 @@ def _pyinstaller_cmd(onefile: bool) -> list[str]:
         f"--distpath={os.path.join(_SCRIPT_DIR, 'dist')}",
     ]
 
+    # customtkinter stores fonts/themes as package data and loads them via
+    # __file__ at runtime.  PyInstaller's default analysis misses these data
+    # files, so we must collect them explicitly on every platform.
+    cmd.extend([
+        "--collect-data=customtkinter",
+    ])
+
     # Embed platform-appropriate icon
     system = platform.system()
     if system == "Windows" and os.path.isfile(_ICON_ICO):
@@ -48,6 +55,25 @@ def _pyinstaller_cmd(onefile: bool) -> list[str]:
         cmd.append(f"--icon={_ICON_512}")
     elif system == "Linux" and os.path.isfile(_ICON_PNG):
         cmd.append(f"--icon={_ICON_PNG}")
+
+    # pystray selects its backend dynamically at runtime.  PyInstaller only
+    # follows static imports, so the xorg / appindicator / gtk backends are
+    # invisible to it.  Collect all of pystray so every backend is available
+    # inside the bundle.
+    # Collect the entire python-xlib package (Xlib.*) so that no submodule is
+    # accidentally omitted — pystray's xorg backend imports Xlib.threaded,
+    # Xlib.XK, and other helpers beyond just Xlib.display.
+    # six is a pystray runtime dependency; it lives in the system Python on
+    # Ubuntu CI and may not be picked up automatically by PyInstaller.
+    if system == "Linux":
+        cmd.extend([
+            "--collect-all=pystray",
+            "--collect-all=Xlib",
+            "--hidden-import=pystray._xorg",
+            "--hidden-import=pystray._appindicator",
+            "--hidden-import=pystray._gtk",
+            "--hidden-import=six",
+        ])
 
     if onefile:
         cmd.append("--onefile")
@@ -90,7 +116,43 @@ def _build_appimage(dist_dir: str) -> None:
         fh.write(
             '#!/bin/bash\n'
             'HERE="$(dirname "$(readlink -f "${0}")")"\n'
-            'exec "${HERE}/usr/bin/iconic-filer/iconic-filer" "$@"\n'
+            'BIN="${HERE}/usr/bin/iconic-filer"\n'
+            'LOG="${HOME}/.iconic-filer/appimage-launch.log"\n'
+            'mkdir -p "$(dirname "${LOG}")"\n'
+            '\n'
+            '# On Wayland desktops (e.g. Bazzite/KDE, GNOME Wayland) DISPLAY\n'
+            '# may not be set.  KDE Plasma 6 starts XWayland on-demand: the\n'
+            '# moment any X11 client connects to :0 the server starts.\n'
+            '# Defaulting to :0 is safe on all common Wayland DEs.\n'
+            'export DISPLAY="${DISPLAY:-:0}"\n'
+            '\n'
+            "# Point Python's bundled Tcl/Tk to the data dirs inside the bundle\n"
+            '# so that customtkinter and tkinter can find their assets.\n'
+            'export TCL_LIBRARY="${TCL_LIBRARY:-${BIN}/_tcl_data}"\n'
+            'export TK_LIBRARY="${TK_LIBRARY:-${BIN}/_tk_data}"\n'
+            '\n'
+            '# Keep system XDG data dirs so GTK themes / icon themes resolve.\n'
+            'export XDG_DATA_DIRS="${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"\n'
+            '\n'
+            '# The bundle only contains the pystray Xorg/X11 backend; skip the\n'
+            '# AppIndicator/GTK backend probes that would fail with ImportError\n'
+            '# anyway (gi.repository not bundled) and go straight to xorg.\n'
+            'export PYSTRAY_BACKEND="${PYSTRAY_BACKEND:-xorg}"\n'
+            '\n'
+            '# Log launch for easier debugging.\n'
+            '{\n'
+            '  echo "--- $(date) ---"\n'
+            '  echo "DISPLAY=${DISPLAY}"\n'
+            '  echo "WAYLAND_DISPLAY=${WAYLAND_DISPLAY}"\n'
+            '  echo "PYSTRAY_BACKEND=${PYSTRAY_BACKEND}"\n'
+            '  echo "XDG_DATA_DIRS=${XDG_DATA_DIRS}"\n'
+            '  echo "APPIMAGE=${APPIMAGE}"\n'
+            '} >> "${LOG}" 2>&1\n'
+            '\n'
+            '# Fallback: if FUSE is unavailable (e.g. running extracted), this\n'
+            '# log entry is written directly.  Users on systems that still lack\n'
+            '# FUSE support can run: APPIMAGE_EXTRACT_AND_RUN=1 ./Iconic*.AppImage\n'
+            'exec "${BIN}/iconic-filer" "$@"\n'
         )
     os.chmod(apprun_path, 0o755)
 
@@ -134,10 +196,22 @@ def _build_appimage(dist_dir: str) -> None:
 
     out_appimage = os.path.join(dist_dir, "IconicFiler-x86_64.AppImage")
     env = dict(os.environ, ARCH="x86_64")
-    subprocess.check_call(
-        [appimagetool, app_dir, out_appimage],
-        env=env,
-    )
+
+    # Use the type2-runtime when available (supports both libfuse2 and libfuse3
+    # via squashfuse fallback — required on Fedora 40+ / Bazzite which ship only
+    # libfuse3 and no longer provide the legacy libfuse.so.2).
+    appimage_cmd = [appimagetool]
+    runtime_env = os.environ.get("APPIMAGE_RUNTIME")
+    if runtime_env:
+        runtime_path = os.path.abspath(runtime_env)
+        if os.path.isfile(runtime_path) and os.access(runtime_path, os.X_OK):
+            appimage_cmd.extend(["--runtime-file", runtime_path])
+            print(f"Using type2-runtime: {runtime_path}")
+        else:
+            print(f"WARNING: APPIMAGE_RUNTIME={runtime_env!r} not found or not executable")
+    appimage_cmd.extend([app_dir, out_appimage])
+
+    subprocess.check_call(appimage_cmd, env=env)
     print(f"\nAppImage built: {out_appimage}")
 
 

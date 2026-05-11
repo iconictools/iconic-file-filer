@@ -87,7 +87,7 @@ class SortPrompt:
         history: Any = None,
         on_snooze: Callable[[], None] | None = None,
         on_save_destination: Callable[[str], None] | None = None,
-        always_rule_default: bool = True,
+        always_rule_default: bool = False,
         auto_accept_seconds: int = 0,
     ) -> None:
         """
@@ -469,10 +469,9 @@ class SortPrompt:
                 footer,
                 text="📂 Add & watch this folder",
                 text_color=t["accent"],
+                command=_do_quick_add,
                 **_ghost_kw,
-            ).pack(side="left")  # type: ignore[arg-type]
-            # Override command after creation (can't mix ** and explicit kwarg)
-            footer.winfo_children()[-1].configure(command=_do_quick_add)
+            ).pack(side="left")
 
         # Snooze / Later
         if self._on_snooze is not None:

@@ -69,7 +69,7 @@ def notify(
     title: str,
     message: str,
     timeout: int = 5,
-    fallback_strategy: str = "toast-fallback",
+    fallback_strategy: str = "log-only",
 ) -> None:
     """Show a notification (non-blocking).
 

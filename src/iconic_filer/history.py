@@ -29,7 +29,10 @@ class History:
     def __init__(self, db_path: str | None = None) -> None:
         self.db_path = db_path or DEFAULT_HISTORY_DB
         os.makedirs(os.path.dirname(self.db_path) or ".", exist_ok=True)
-        self._conn = sqlite3.connect(self.db_path, check_same_thread=False)
+        self._conn: sqlite3.Connection = sqlite3.connect(
+            self.db_path, check_same_thread=False
+        )
+        self._closed = False
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.executescript(_SCHEMA)
         try:
@@ -234,4 +237,6 @@ class History:
         return [(r[0], r[1]) for r in rows]
 
     def close(self) -> None:
-        self._conn.close()
+        if not self._closed:
+            self._closed = True
+            self._conn.close()

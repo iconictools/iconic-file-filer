@@ -110,6 +110,8 @@ class App:
         self._snooze_timers: list[threading.Timer] = []
         # Prevent overlapping full-folder rescans.
         self._rescan_lock = threading.Lock()
+        # Track files already prompted/queued to prevent on_modified re-triggers.
+        self._prompted: set[str] = set()
 
         self.achievements = Achievements(
             os.path.join(os.path.dirname(self.config.path), "achievements.db")
@@ -140,10 +142,17 @@ class App:
 
     def run(self) -> None:
         """Start the application (blocks until quit)."""
-        show_startup_indicator(
-            theme_name=self.config.get_setting("theme", "dark"),
-            monitored_count=len(self.config.monitored_folders),
-        )
+        # The startup indicator requires a display connection.  On Wayland
+        # without XWayland or when DISPLAY is not accessible, CTk/Tk will
+        # raise TclError.  Skip the indicator gracefully rather than crashing
+        # before the tray error handler has a chance to run.
+        try:
+            show_startup_indicator(
+                theme_name=self.config.get_setting("theme", "dark"),
+                monitored_count=len(self.config.monitored_folders),
+            )
+        except Exception:  # noqa: BLE001
+            logger.debug("Startup indicator skipped (no display available).")
         # First-run setup if no monitored folders
         first_run = not bool(self.config.monitored_folders)
         if first_run:
@@ -225,6 +234,7 @@ class App:
             self._ipc_server.stop()
             self.watcher.stop()
             self.history.close()
+            self.achievements.close()
 
     def _update_tray_monitored_count(self) -> None:
         """Update the tray tooltip to show how many folders are being monitored."""
@@ -243,7 +253,7 @@ class App:
             if not folder:
                 return
             folder = os.path.abspath(folder)
-            if folder in self.config.monitored_folders:
+            if self.config._find_folder_key(folder) is not None:
                 return
             # Find a parent folder to inherit destinations from (proper path containment)
             monitored = list(self.config.monitored_folders)
@@ -265,13 +275,13 @@ class App:
     def _quit(self) -> None:
         logger.info("Shutting down...")
         self._stop_event.set()
-        for timer in self._snooze_timers:
+        with self._lock:
+            timers = list(self._snooze_timers)
+            self._snooze_timers.clear()
+        for timer in timers:
             timer.cancel()
-        self._snooze_timers.clear()
         self._ipc_server.stop()
         self.watcher.stop()
-        self.history.close()
-        self.achievements.close()
 
     def _cleanup_reminder_loop(self) -> None:
         """Background daemon: notify when a monitored folder has too many files."""
@@ -316,7 +326,7 @@ class App:
                 if not os.path.isdir(folder):
                     if folder not in self._health_notified:
                         fallback = self.config.get_setting(
-                            "notification_fallback", "toast-fallback"
+                            "notification_fallback", "log-only"
                         )
                         notify(
                             "Folder unavailable",
@@ -418,7 +428,7 @@ class App:
             filepath, destinations, merged_ext_map
         )
 
-        style = self.config.get_setting("batch_mode_style", "one-by-one")
+        style = self.config.get_setting("batch_mode_style", "batch-list")
         if style == "batch-list":
             with self._lock:
                 if filepath not in self._batch_queue:
@@ -427,6 +437,16 @@ class App:
             self.tray.set_pending(True, count)
             self._schedule_batch_window()
             return
+
+        # Prevent re-prompting a file that is already being shown to the user
+        # (handles on_modified re-triggers from editor auto-saves / re-downloads).
+        with self._lock:
+            if filepath in self._prompted:
+                logger.debug(
+                    "Skipping re-prompt for already-prompted path: %s", filepath
+                )
+                return
+            self._prompted.add(filepath)
 
         theme_name = self.config.get_setting("theme", "dark")
         auto_accept_secs = self.config.get_setting("prompt_auto_accept_seconds", 0)
@@ -470,6 +490,11 @@ class App:
         self, filepath: str, destination: str | None, always: bool
     ) -> None:
         """Callback after the user responds to a prompt."""
+        # Release the prompted guard so the file can be re-prompted if it
+        # reappears in the watched folder later.
+        with self._lock:
+            self._prompted.discard(filepath)
+
         if destination is None:
             logger.info("Ignored: %s", filepath)
             return
@@ -486,7 +511,7 @@ class App:
         else:
             # Auto-learn: silently create a rule once the user has manually
             # sorted the same extension to the same destination N times.
-            threshold = self.config.get_setting("auto_learn_threshold", 3)
+            threshold = self.config.get_setting("auto_learn_threshold", 0)
             if threshold and ext_lower and ext_lower not in self.rules.extension_map:
                 dest_abs = os.path.abspath(destination)
                 count = sum(
@@ -532,10 +557,16 @@ class App:
                         source_folder = mf
                         break
 
-            # Apply rename pattern if configured (files only, not folders)
+            # Apply rename pattern if configured (files only, not folders).
+            # Per-folder pattern takes priority over the global pattern.
             if not os.path.isdir(src):
                 _, ext = os.path.splitext(src)
-                rename_pat = self.config.get_rename_pattern(ext.lower())
+                ext_lower = ext.lower()
+                rename_pat = (
+                    self.config.get_folder_rename_pattern(source_folder, ext_lower)
+                    if source_folder
+                    else None
+                ) or self.config.get_rename_pattern(ext_lower)
                 if rename_pat:
                     new_name = _apply_rename_pattern(src, rename_pat)
                     dst = os.path.join(dest_dir, new_name)
@@ -575,7 +606,7 @@ class App:
                         f"Achievement unlocked: {ach.emoji} {ach.name}",
                         ach.description,
                         fallback_strategy=self.config.get_setting(
-                            "notification_fallback", "toast-fallback"
+                            "notification_fallback", "log-only"
                         ),
                     )
             except Exception:
@@ -586,7 +617,7 @@ class App:
                 src_name = os.path.basename(src)
                 dest_name = os.path.basename(dest_dir)
                 fallback = self.config.get_setting(
-                    "notification_fallback", "toast-fallback"
+                    "notification_fallback", "log-only"
                 )
                 notify(
                     "File sorted", f"{src_name} -> {dest_name}",
@@ -621,6 +652,11 @@ class App:
 
     def _on_snooze_file(self, filepath: str) -> None:
         """Re-queue *filepath* for prompting after the configured snooze delay."""
+        # Release the prompted guard immediately so that when the snooze fires
+        # and _on_file_detected is called again, the file is not suppressed.
+        with self._lock:
+            self._prompted.discard(filepath)
+
         snooze = max(1, self.config.get_setting("snooze_minutes", 30))
         delay = snooze * 60
 
@@ -748,7 +784,7 @@ class App:
                 matched,
                 scanned,
             )
-            fallback = self.config.get_setting("notification_fallback", "toast-fallback")
+            fallback = self.config.get_setting("notification_fallback", "log-only")
             if self.config.get_setting("native_notifications", True):
                 if matched:
                     notify(
@@ -794,7 +830,7 @@ class App:
             return
 
         # Already monitored?
-        if folder in self.config.monitored_folders:
+        if self.config._find_folder_key(folder) is not None:
             messagebox.showinfo(
                 "Already watched",
                 f"This folder is already being monitored:\n{folder}",
@@ -889,7 +925,7 @@ class App:
           monitoring the new folder immediately.
         """
         # Already monitored?
-        if folder_path in self.config.monitored_folders:
+        if self.config._find_folder_key(folder_path) is not None:
             logger.info("Quick Add: already monitored — %s", folder_path)
             return
 
@@ -949,7 +985,7 @@ class App:
         self._focus_mode = not self._focus_mode
         self.config.set_setting("focus_mode", self._focus_mode)
         self.tray.set_focus_mode(self._focus_mode)
-        fallback = self.config.get_setting("notification_fallback", "toast-fallback")
+        fallback = self.config.get_setting("notification_fallback", "log-only")
         if not self._focus_mode:
             self._process_batch_queue()
             if self.config.get_setting("native_notifications", True):
@@ -969,7 +1005,7 @@ class App:
 
     def _undo_last(self) -> None:
         result = self.history.undo_last()
-        fallback = self.config.get_setting("notification_fallback", "toast-fallback")
+        fallback = self.config.get_setting("notification_fallback", "log-only")
         if not result:
             logger.info("Nothing to undo.")
             if self.config.get_setting("native_notifications", True):
@@ -1011,11 +1047,12 @@ class App:
             root.withdraw()
             root.attributes("-topmost", True)
             answer = messagebox.askyesno(
-                "Undo rename?",
-                f"The file was renamed during the move:\n\n"
-                f"  Original name: {dst_basename}\n"
-                f"  Current name:  {src_basename}\n\n"
-                "Do you also want to restore the original filename?",
+                "Keep renamed version?",
+                f"The file was renamed when it was sorted:\n\n"
+                f"  Before sorting: {src_basename}\n"
+                f"  Sorted as:      {dst_basename}\n\n"
+                f'It has been restored to "{src_basename}".\n'
+                f'Do you also want to rename it to "{dst_basename}"?',
                 parent=root,
             )
             root.destroy()
@@ -1025,9 +1062,9 @@ class App:
             restored = os.path.join(os.path.dirname(src_path), dst_basename)
             try:
                 os.rename(src_path, restored)
-                logger.info("Name restored: %s -> %s", src_basename, dst_basename)
+                logger.info("Renamed back to sorted name: %s -> %s", src_basename, dst_basename)
             except OSError as exc:
-                logger.warning("Could not restore filename: %s", exc)
+                logger.warning("Could not rename to sorted name: %s", exc)
 
     def _show_settings(self) -> None:
         """Open the settings dialog."""
@@ -1114,6 +1151,10 @@ class App:
         - ``'batch-list'``: show a batch window
         """
         with self._lock:
+            if self._batch_window_open:
+                # A batch window is already visible; leave the queue untouched
+                # so the existing window can handle deferred items.
+                return
             queue = list(self._batch_queue)
             self._batch_queue.clear()
             if self._batch_open_timer is not None and self._batch_open_timer.is_alive():
@@ -1121,20 +1162,30 @@ class App:
             self._batch_open_timer = None
         self.tray.set_pending(False)
 
-        style = self.config.get_setting("batch_mode_style", "one-by-one")
+        style = self.config.get_setting("batch_mode_style", "batch-list")
         if style == "batch-list" and queue:
+            with self._lock:
+                self._batch_window_open = True
             theme_name = self.config.get_setting("theme", "dark")
-            threading.Thread(
-                target=show_batch_list,
-                args=(self.config, self.rules, self.watcher, queue,
-                      theme_name, self._move_file),
-                kwargs={
-                    "on_whitelist": self.config.add_to_whitelist,
-                    "on_snooze": self._on_snooze_file,
-                    "on_defer": self._requeue_batch_items,
-                },
-                daemon=True,
-            ).start()
+
+            def _run() -> None:
+                try:
+                    show_batch_list(
+                        self.config, self.rules, self.watcher, queue,
+                        theme_name, self._move_file,
+                        on_whitelist=self.config.add_to_whitelist,
+                        on_snooze=self._on_snooze_file,
+                        on_defer=self._requeue_batch_items,
+                    )
+                finally:
+                    with self._lock:
+                        self._batch_window_open = False
+                        queued_count = len(self._batch_queue)
+                    if queued_count:
+                        self.tray.set_pending(True, queued_count)
+                        self._schedule_batch_window()
+
+            threading.Thread(target=_run, daemon=True).start()
         else:
             for filepath in queue:
                 if os.path.exists(filepath):
@@ -1146,10 +1197,14 @@ class App:
         """Delete all user data from disk and terminate the running app."""
         logger.warning("User requested delete-all-user-data operation.")
         self._stop_event.set()
-        for timer in self._snooze_timers:
+        with self._lock:
+            timers = list(self._snooze_timers)
+            self._snooze_timers.clear()
+        for timer in timers:
             timer.cancel()
-        self._snooze_timers.clear()
         self.watcher.stop()
+        # Close DB connections before rmtree so file handles are released on
+        # all platforms (Windows cannot delete open files).
         self.history.close()
         self.achievements.close()
 

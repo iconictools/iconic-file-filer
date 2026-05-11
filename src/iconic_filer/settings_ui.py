@@ -101,7 +101,7 @@ def _build_general_tab(tabview: ctk.CTkTabview, cfg: "Config", t: dict) -> dict:
     row += 1
     _lbl(f, 'Pre-check "Always send .ext here":', t).grid(row=row, column=0, sticky="w",
                                                            padx=8, pady=3)
-    always_rule_var = tk.BooleanVar(value=cfg.get_setting("prompt_always_rule", True))
+    always_rule_var = tk.BooleanVar(value=cfg.get_setting("prompt_always_rule", False))
     _check(f, "Enabled", always_rule_var, t).grid(row=row, column=1, sticky="w",
                                                     padx=(0, 8), pady=3)
     row += 1
@@ -130,7 +130,7 @@ def _build_general_tab(tabview: ctk.CTkTabview, cfg: "Config", t: dict) -> dict:
     row += 1
 
     _lbl(f, "Fallback when native fails:", t).grid(row=row, column=0, sticky="w", padx=8, pady=3)
-    fallback_var = tk.StringVar(value=cfg.get_setting("notification_fallback", "toast-fallback"))
+    fallback_var = tk.StringVar(value=cfg.get_setting("notification_fallback", "log-only"))
     ctk.CTkOptionMenu(f, variable=fallback_var,
                       values=["toast-fallback", "log-only", "plyer-only"],
                       font=ctk.CTkFont(size=10)).grid(row=row, column=1, sticky="ew",
@@ -896,7 +896,7 @@ def _build_system_tab(
                                                   padx=8, pady=(12, 4))
     row += 1
     _lbl(f, "Batch mode style:", t).grid(row=row, column=0, sticky="w", padx=8, pady=3)
-    batch_var = tk.StringVar(value=cfg.get_setting("batch_mode_style", "one-by-one"))
+    batch_var = tk.StringVar(value=cfg.get_setting("batch_mode_style", "batch-list"))
     ctk.CTkOptionMenu(f, variable=batch_var, values=["one-by-one", "batch-list"],
                       font=ctk.CTkFont(size=10)).grid(row=row, column=1, sticky="ew",
                                                        padx=(0, 8), pady=3)
