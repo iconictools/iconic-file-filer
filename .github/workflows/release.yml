@@ -38,7 +38,9 @@ jobs:
       - name: Rename Windows binary
         if: runner.os == 'Windows'
         shell: bash
-        run: mv dist/iconic-filer.exe "dist/IconicFileFiler-windows-x86_64.exe"
+        run: |
+          VERSION=$(python -c 'from iconic_filer import __version__; print(__version__)')
+          mv dist/iconic-filer.exe "dist/IconicFileFiler-${VERSION}-windows-x86_64.exe"
 
       - name: Rename macOS binary
         if: runner.os == 'macOS'

@@ -61,7 +61,7 @@ Head to the [Releases](https://github.com/trabalhefabricio/sort-it-now/releases)
 | Platform | Download |
 |---|---|
 | **Linux** | `IconicFiler-<version>-x86_64.AppImage` — make executable, double-click to run |
-| **Windows** | `iconic-filer.exe` — run directly, no installer needed |
+| **Windows** | `IconicFileFiler-<version>-windows-x86_64.exe` — run directly, no installer needed |
 | **macOS** | `iconic-filer` — run from Terminal or double-click |
 
 #### Linux AppImage quick start
