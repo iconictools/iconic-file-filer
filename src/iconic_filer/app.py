@@ -1156,25 +1156,25 @@ class App:
         }
         incoming_map = {_norm(folder): folder for folder in folders}
 
-        for key, stored in existing_map.items():
+        for key, existing_folder in existing_map.items():
             if key not in incoming_map:
-                self.config.remove_monitored_folder(stored)
+                self.config.remove_monitored_folder(existing_folder)
                 try:
-                    self.watcher.remove_folder(stored)
+                    self.watcher.remove_folder(existing_folder)
                 except Exception as exc:
-                    logger.error("Cannot stop watching %s: %s", stored, exc)
+                    logger.error("Cannot stop watching %s: %s", existing_folder, exc)
 
         for key, folder in incoming_map.items():
             dests = [os.path.abspath(d) for d in folders.get(folder, [])]
-            stored = existing_map.get(key)
-            if stored is None:
+            existing_folder = existing_map.get(key)
+            if existing_folder is None:
                 self.config.add_monitored_folder(folder, dests)
                 try:
                     self.watcher.add_folder(folder)
                 except Exception as exc:
                     logger.error("Cannot watch %s: %s", folder, exc)
             else:
-                self.config.set_destinations(stored, dests)
+                self.config.set_destinations(existing_folder, dests)
 
         self._update_tray_monitored_count()
 
