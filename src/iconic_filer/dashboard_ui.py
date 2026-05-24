@@ -391,7 +391,7 @@ def show_batch_list(
         root,
         text=(
             "Tip: For the step-by-step sorting prompt, open Settings → System and set "
-            'Batch mode style to "one-by-one".'
+            'Pending review style to "one-by-one".'
         ),
         font=ctk.CTkFont(size=10),
         text_color=theme["muted"],

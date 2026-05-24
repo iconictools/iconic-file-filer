@@ -684,10 +684,7 @@ class SortPrompt:
         if snoozed[0]:
             return
 
-        if whitelisted[0]:
-            self._on_done(self._filepath, None, False)
-            return
-        if deleted[0]:
+        if whitelisted[0] or deleted[0]:
             self._on_done(self._filepath, None, False)
             return
 

@@ -407,6 +407,7 @@ class App:
         destinations = self.config.get_folder_destinations(parent_monitored)
         if not destinations:
             logger.debug("No destinations configured for %s", filepath)
+            # Continue so the prompt can offer to add/create destinations.
 
         # Merge global and per-folder extension maps (per-folder takes priority)
         folder_ext_map = self.config.get_folder_extension_map(parent_monitored)
