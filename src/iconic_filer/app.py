@@ -10,6 +10,7 @@ import shutil
 import sys
 import threading
 import time
+from typing import Callable
 
 from iconic_filer.achievements import Achievements
 from iconic_filer.classifier import suggest_destinations
@@ -1095,10 +1096,23 @@ class App:
             except OSError as exc:
                 logger.warning("Could not rename to sorted name: %s", exc)
 
+    def _run_ui(self, action: Callable[[], None], label: str) -> None:
+        """Run a UI action on the main thread when possible."""
+        def _wrapped() -> None:
+            try:
+                action()
+            except Exception:
+                logger.error("UI action failed: %s", label, exc_info=True)
+
+        if threading.current_thread() is threading.main_thread():
+            _wrapped()
+        else:
+            threading.Thread(target=_wrapped, daemon=True).start()
+
     def _show_settings(self) -> None:
         """Open the settings dialog."""
-        t = threading.Thread(
-            target=lambda: SettingsDialog(
+        self._run_ui(
+            lambda: SettingsDialog(
                 self.config,
                 on_open_sorting_rules=self._show_rules,
                 on_rescan=self._trigger_rescan,
@@ -1106,23 +1120,18 @@ class App:
                 on_folder_removed=self._on_settings_folder_removed,
                 on_delete_user_data=self._delete_all_user_data,
             ).show(),
-            daemon=True,
+            "settings",
         )
-        t.start()
 
     def _show_manual(self) -> None:
         """Open the in-app manual."""
         theme_name = self.config.get_setting("theme", "dark")
-        t = threading.Thread(
-            target=lambda: show_manual(theme_name),
-            daemon=True,
-        )
-        t.start()
+        self._run_ui(lambda: show_manual(theme_name), "manual")
 
     def _show_folder_setup(self) -> None:
         """Open folder setup (watched folders + destinations split view)."""
-        t = threading.Thread(
-            target=lambda: SettingsDialog(
+        self._run_ui(
+            lambda: SettingsDialog(
                 self.config,
                 initial_tab="Folders",
                 on_open_sorting_rules=self._show_rules,
@@ -1131,9 +1140,8 @@ class App:
                 on_folder_removed=self._on_settings_folder_removed,
                 on_delete_user_data=self._delete_all_user_data,
             ).show(),
-            daemon=True,
+            "folder setup",
         )
-        t.start()
 
     def _on_settings_folder_added(self, folder: str) -> None:
         """Keep watcher and tray state in sync when Settings adds a watched folder."""
@@ -1153,24 +1161,26 @@ class App:
 
     def _show_rules(self) -> None:
         """Open the rule management dialog."""
-        t = threading.Thread(
-            target=lambda: RulesDialog(self.rules, self.config).show(),
-            daemon=True,
+        self._run_ui(
+            lambda: RulesDialog(self.rules, self.config).show(),
+            "sorting rules",
         )
-        t.start()
 
     def _show_dashboard(self) -> None:
         """Open the activity window."""
         theme_name = self.config.get_setting("theme", "dark")
-        t = threading.Thread(
-            target=show_dashboard,
-            args=(
-                self.config, self.history, self._batch_queue,
-                self._lock, self.watcher, theme_name, self._trigger_rescan,
+        self._run_ui(
+            lambda: show_dashboard(
+                self.config,
+                self.history,
+                self._batch_queue,
+                self._lock,
+                self.watcher,
+                theme_name,
+                self._trigger_rescan,
             ),
-            daemon=True,
+            "activity dashboard",
         )
-        t.start()
 
     def _show_file_list(self) -> None:
         """Open the pending file list window."""
@@ -1213,7 +1223,7 @@ class App:
                     self.tray.set_pending(True, queued_count)
                     self._schedule_batch_window()
 
-        threading.Thread(target=_run, daemon=True).start()
+        self._run_ui(_run, "pending file list")
 
     def _process_batch_queue(self) -> None:
         """Review files queued during focus mode."""
