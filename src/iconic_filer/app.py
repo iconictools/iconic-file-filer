@@ -157,7 +157,7 @@ class App:
         # First-run setup if no monitored folders
         first_run = not bool(self.config.monitored_folders)
         if first_run:
-            wizard = SetupWizard()
+            wizard = SetupWizard(theme=self.config.get_setting("theme", "dark"))
             folders = wizard.run()
             if not folders:
                 logger.info("No folders configured -- exiting.")
@@ -171,12 +171,7 @@ class App:
             )
             self.config.set_setting("startup_welcome_seen", True)
             if action == "setup":
-                SettingsDialog(
-                    self.config,
-                    initial_tab="Folders",
-                    on_open_sorting_rules=self._show_rules,
-                    on_delete_user_data=self._delete_all_user_data,
-                ).show()
+                self._run_setup_wizard()
             elif action == "manual":
                 show_manual(self.config.get_setting("theme", "dark"))
 
@@ -1106,7 +1101,12 @@ class App:
 
         if threading.current_thread() != threading.main_thread():
             logger.debug("UI action requested off main thread: %s", label)
-        _wrapped()
+        thread = threading.Thread(
+            target=_wrapped,
+            daemon=True,
+            name=f"ui-{label.replace(' ', '-')}",
+        )
+        thread.start()
 
     def _show_settings(self) -> None:
         """Open the settings dialog."""
@@ -1129,18 +1129,54 @@ class App:
 
     def _show_folder_setup(self) -> None:
         """Open folder setup (watched folders + destinations split view)."""
-        self._run_ui(
-            lambda: SettingsDialog(
-                self.config,
-                initial_tab="Folders",
-                on_open_sorting_rules=self._show_rules,
-                on_rescan=self._trigger_rescan,
-                on_folder_added=self._on_settings_folder_added,
-                on_folder_removed=self._on_settings_folder_removed,
-                on_delete_user_data=self._delete_all_user_data,
-            ).show(),
-            "folder setup",
+        self._run_ui(self._run_setup_wizard, "folder setup")
+
+    def _run_setup_wizard(self) -> None:
+        """Run the setup wizard and apply any changes."""
+        initial = {
+            folder: self.config.get_folder_destinations(folder)
+            for folder in self.config.monitored_folders
+        }
+        wizard = SetupWizard(
+            theme=self.config.get_setting("theme", "dark"),
+            initial_folders=initial or None,
         )
+        folders = wizard.run()
+        if not folders:
+            return
+        self._apply_wizard_folders(folders)
+
+    def _apply_wizard_folders(self, folders: dict[str, list[str]]) -> None:
+        """Update monitored folders after a wizard run."""
+        def _norm(path: str) -> str:
+            return os.path.normcase(os.path.normpath(os.path.abspath(path)))
+
+        existing_map = {
+            _norm(folder): folder for folder in self.config.monitored_folders
+        }
+        incoming_map = {_norm(folder): folder for folder in folders}
+
+        for key, stored in existing_map.items():
+            if key not in incoming_map:
+                self.config.remove_monitored_folder(stored)
+                try:
+                    self.watcher.remove_folder(stored)
+                except Exception as exc:
+                    logger.error("Cannot stop watching %s: %s", stored, exc)
+
+        for key, folder in incoming_map.items():
+            dests = [os.path.abspath(d) for d in folders.get(folder, [])]
+            stored = existing_map.get(key)
+            if stored is None:
+                self.config.add_monitored_folder(folder, dests)
+                try:
+                    self.watcher.add_folder(folder)
+                except Exception as exc:
+                    logger.error("Cannot watch %s: %s", folder, exc)
+            else:
+                self.config.set_destinations(stored, dests)
+
+        self._update_tray_monitored_count()
 
     def _on_settings_folder_added(self, folder: str) -> None:
         """Keep watcher and tray state in sync when Settings adds a watched folder."""

@@ -711,10 +711,15 @@ class SortPrompt:
 class SetupWizard:
     """First-run wizard to configure monitored folders and destinations."""
 
-    def __init__(self, theme: str = "dark") -> None:
+    def __init__(
+        self,
+        theme: str = "dark",
+        initial_folders: dict[str, list[str]] | None = None,
+    ) -> None:
         self.result: dict[str, list[str]] = {}
         self._root: ctk.CTk | None = None
         self._theme_name = theme
+        self._initial_folders = initial_folders
 
     def run(self) -> dict[str, list[str]]:
         """Show the wizard and return ``{folder: [destinations]}``."""
@@ -723,37 +728,40 @@ class SetupWizard:
 
         root = ctk.CTk()
         self._root = root
-        root.title("Iconic File Filer — Setup")
+        root.title("Iconic File Filer — Setup Wizard")
         root.resizable(False, False)
 
-        w, h = 560, 520
+        w, h = 640, 560
         sx = root.winfo_screenwidth() // 2 - w // 2
         sy = root.winfo_screenheight() // 2 - h // 2
         root.geometry(f"{w}x{h}+{sx}+{sy}")
 
         ctk.CTkLabel(
             root,
-            text="🗂 Iconic File Filer — Setup",
-            font=_font(18, "bold"),
+            text="🧭 Iconic File Filer — Setup Wizard",
+            font=_font(19, "bold"),
             text_color=t["accent"],
-        ).pack(pady=(24, 4))
+        ).pack(pady=(22, 4))
         ctk.CTkLabel(
             root,
-            text="Choose folders to monitor and their destination folders.",
+            text="Follow the steps to choose watched folders and destinations.",
             font=_font(11),
             text_color=t["muted"],
-        ).pack(pady=(0, 16))
-        ctk.CTkLabel(
-            root,
-            text="1) Add a watched folder   2) Pick one or more destinations   3) Finalize and run in tray",
-            font=_font(10),
-            text_color=t["muted"],
-        ).pack(pady=(0, 8))
+        ).pack(pady=(0, 10))
 
-        # Scrollable list of configured folders
-        scroll_frame = ctk.CTkScrollableFrame(root, height=240)
-        scroll_frame.pack(fill="x", padx=24, pady=4)
-        scroll_frame.grid_columnconfigure(0, weight=1)
+        step_label = ctk.CTkLabel(
+            root,
+            text="",
+            font=_font(11, "bold"),
+            text_color=t["btn_fg"],
+        )
+        step_label.pack(pady=(0, 6))
+
+        progress = ctk.CTkProgressBar(root, width=320)
+        progress.pack(pady=(0, 12))
+
+        content = ctk.CTkFrame(root, fg_color="transparent")
+        content.pack(fill="both", expand=True, padx=24, pady=(6, 0))
 
         # Pre-populate with common system folders if they exist.
         def _detect_default_folders() -> dict[str, list[str]]:
@@ -776,71 +784,314 @@ class SetupWizard:
                         detected[m] = dests
             return detected
 
-        folders_data: dict[str, list[str]] = _detect_default_folders()
-        row_labels: list[ctk.CTkLabel] = []
+        def _normalize_path(path: str) -> str:
+            return os.path.abspath(path)
 
-        def _refresh_list() -> None:
-            for lbl in row_labels:
-                lbl.destroy()
-            row_labels.clear()
-            for folder, dests in folders_data.items():
-                dest_names = ", ".join(os.path.basename(d) for d in dests)
-                text = f"  {os.path.basename(folder)}  →  {dest_names}\n  {folder}"
-                lbl = ctk.CTkLabel(
-                    scroll_frame,
-                    text=text,
+        folders_data: dict[str, list[str]] = {}
+        if self._initial_folders is None:
+            folders_data = _detect_default_folders()
+        else:
+            for folder, dests in self._initial_folders.items():
+                if not folder:
+                    continue
+                folders_data[_normalize_path(folder)] = [
+                    _normalize_path(d) for d in dests
+                ]
+
+        # ── Step 1: Watched folders ────────────────────────────────────
+        step_one = ctk.CTkFrame(content, fg_color="transparent")
+        ctk.CTkLabel(
+            step_one,
+            text="Step 1 — Choose watched folders",
+            font=_font(14, "bold"),
+            text_color=t["accent"],
+        ).pack(anchor="w", pady=(0, 6))
+        ctk.CTkLabel(
+            step_one,
+            text="Pick the folders you want Iconic File Filer to watch.",
+            font=_font(10),
+            text_color=t["muted"],
+        ).pack(anchor="w", pady=(0, 10))
+
+        watch_list = ctk.CTkScrollableFrame(step_one, height=230)
+        watch_list.pack(fill="x", pady=4)
+
+        def _remove_folder(folder: str) -> None:
+            folders_data.pop(folder, None)
+            _refresh_watch_list()
+
+        def _refresh_watch_list() -> None:
+            for child in watch_list.winfo_children():
+                child.destroy()
+            if not folders_data:
+                ctk.CTkLabel(
+                    watch_list,
+                    text="No watched folders yet. Add one to continue.",
+                    font=_font(10),
+                    text_color=t["muted"],
+                ).pack(anchor="w", padx=6, pady=6)
+                return
+            for folder in sorted(folders_data):
+                row = ctk.CTkFrame(watch_list, corner_radius=8)
+                row.pack(fill="x", padx=4, pady=4)
+                label = ctk.CTkLabel(
+                    row,
+                    text=f"📂  {os.path.basename(folder) or folder}\n{folder}",
                     font=_font(11),
                     anchor="w",
                     justify="left",
                 )
-                lbl.pack(fill="x", pady=4, padx=4)
-                row_labels.append(lbl)
+                label.pack(side="left", fill="x", expand=True, padx=10, pady=8)
+                ctk.CTkButton(
+                    row,
+                    text="Remove",
+                    width=90,
+                    fg_color=t["btn_bg"],
+                    text_color=t["btn_fg"],
+                    hover_color=t["btn_active"],
+                    command=lambda f=folder: _remove_folder(f),
+                ).pack(side="right", padx=10, pady=8)
 
         def _add_folder() -> None:
             folder = filedialog.askdirectory(title="Select folder to monitor")
             if not folder:
                 return
-            dests = pick_destination_folders(folder, parent=root)
-            if dests:
-                folders_data[folder] = dests
-                _refresh_list()
-
-        def _done() -> None:
-            if not folders_data:
-                messagebox.showwarning(
-                    "Setup incomplete",
-                    "Add at least one folder to watch before finishing setup.",
+            folder = _normalize_path(folder)
+            if folder in folders_data:
+                messagebox.showinfo(
+                    "Already added",
+                    f"This folder is already being watched:\n{folder}",
                     parent=root,
                 )
                 return
-            self.result = folders_data
-            root.destroy()
+            folders_data[folder] = folders_data.get(folder, [])
+            _refresh_watch_list()
 
-        # Show pre-populated folders immediately
-        _refresh_list()
-
-        btn_frame = ctk.CTkFrame(root, fg_color="transparent")
-        btn_frame.pack(pady=16)
         ctk.CTkButton(
-            btn_frame,
-            text="+ Add Folder",
+            step_one,
+            text="+ Add watched folder",
             fg_color=t["accent"],
             text_color="#1e1e2e",
             hover_color=t["btn_active"],
             font=_font(12, "bold"),
             corner_radius=10,
             command=_add_folder,
-        ).pack(side="left", padx=10)
-        ctk.CTkButton(
-            btn_frame,
+        ).pack(anchor="w", pady=(8, 0))
+
+        # ── Step 2: Destinations ───────────────────────────────────────
+        step_two = ctk.CTkFrame(content, fg_color="transparent")
+        ctk.CTkLabel(
+            step_two,
+            text="Step 2 — Pick destination folders",
+            font=_font(14, "bold"),
+            text_color=t["accent"],
+        ).pack(anchor="w", pady=(0, 6))
+        ctk.CTkLabel(
+            step_two,
+            text="Each watched folder needs one or more destination folders.",
+            font=_font(10),
+            text_color=t["muted"],
+        ).pack(anchor="w", pady=(0, 10))
+
+        dest_list = ctk.CTkScrollableFrame(step_two, height=230)
+        dest_list.pack(fill="x", pady=4)
+
+        def _pick_destinations(folder: str) -> None:
+            dests = pick_destination_folders(folder, parent=root)
+            if dests:
+                folders_data[folder] = dests
+                _refresh_dest_list()
+
+        def _refresh_dest_list() -> None:
+            for child in dest_list.winfo_children():
+                child.destroy()
+            if not folders_data:
+                ctk.CTkLabel(
+                    dest_list,
+                    text="No watched folders selected yet.",
+                    font=_font(10),
+                    text_color=t["muted"],
+                ).pack(anchor="w", padx=6, pady=6)
+                return
+            for folder, dests in folders_data.items():
+                dest_names = ", ".join(
+                    os.path.basename(d) for d in dests if d
+                )
+                dest_text = dest_names or "No destinations yet"
+                row = ctk.CTkFrame(dest_list, corner_radius=8)
+                row.pack(fill="x", padx=4, pady=4)
+                ctk.CTkLabel(
+                    row,
+                    text=f"📂  {os.path.basename(folder) or folder}\n{dest_text}",
+                    font=_font(11),
+                    anchor="w",
+                    justify="left",
+                ).pack(side="left", fill="x", expand=True, padx=10, pady=8)
+                ctk.CTkButton(
+                    row,
+                    text="Choose destinations",
+                    width=150,
+                    fg_color=t["btn_bg"],
+                    text_color=t["btn_fg"],
+                    hover_color=t["btn_active"],
+                    command=lambda f=folder: _pick_destinations(f),
+                ).pack(side="right", padx=10, pady=8)
+
+        # ── Step 3: Review ─────────────────────────────────────────────
+        step_three = ctk.CTkFrame(content, fg_color="transparent")
+        ctk.CTkLabel(
+            step_three,
+            text="Step 3 — Review & finish",
+            font=_font(14, "bold"),
+            text_color=t["accent"],
+        ).pack(anchor="w", pady=(0, 6))
+        ctk.CTkLabel(
+            step_three,
+            text="Confirm everything looks right, then start the app.",
+            font=_font(10),
+            text_color=t["muted"],
+        ).pack(anchor="w", pady=(0, 10))
+
+        summary_list = ctk.CTkScrollableFrame(step_three, height=230)
+        summary_list.pack(fill="x", pady=4)
+
+        def _refresh_summary() -> None:
+            for child in summary_list.winfo_children():
+                child.destroy()
+            if not folders_data:
+                ctk.CTkLabel(
+                    summary_list,
+                    text="No watched folders configured.",
+                    font=_font(10),
+                    text_color=t["muted"],
+                ).pack(anchor="w", padx=6, pady=6)
+                return
+            for folder, dests in folders_data.items():
+                dest_names = ", ".join(
+                    os.path.basename(d) for d in dests if d
+                )
+                text = (
+                    f"📂  {os.path.basename(folder) or folder}\n"
+                    f"➡  {dest_names or 'No destinations'}"
+                )
+                ctk.CTkLabel(
+                    summary_list,
+                    text=text,
+                    font=_font(11),
+                    anchor="w",
+                    justify="left",
+                ).pack(fill="x", padx=8, pady=6)
+
+        steps = [step_one, step_two, step_three]
+        step_titles = [
+            "Watched folders",
+            "Destination folders",
+            "Review",
+        ]
+        state = {"idx": 0}
+
+        def _update_step() -> None:
+            for frame in steps:
+                frame.pack_forget()
+            steps[state["idx"]].pack(fill="both", expand=True)
+            step_label.configure(
+                text=f"Step {state['idx'] + 1} of 3 — {step_titles[state['idx']]}",
+            )
+            progress.set((state["idx"] + 1) / len(steps))
+            back_btn.configure(
+                state="normal" if state["idx"] > 0 else "disabled"
+            )
+            next_btn.configure(
+                state="normal" if state["idx"] < len(steps) - 1 else "disabled"
+            )
+            finish_btn.configure(
+                state="normal" if state["idx"] == len(steps) - 1 else "disabled"
+            )
+            _refresh_watch_list()
+            _refresh_dest_list()
+            _refresh_summary()
+
+        def _validate_step_one() -> bool:
+            if folders_data:
+                return True
+            messagebox.showwarning(
+                "Add a watched folder",
+                "Please add at least one folder to watch before continuing.",
+                parent=root,
+            )
+            return False
+
+        def _validate_step_two() -> bool:
+            missing = [
+                folder
+                for folder, dests in folders_data.items()
+                if not dests
+            ]
+            if not missing:
+                return True
+            messagebox.showwarning(
+                "Destinations missing",
+                "Each watched folder needs at least one destination folder.",
+                parent=root,
+            )
+            return False
+
+        def _next() -> None:
+            if state["idx"] == 0 and not _validate_step_one():
+                return
+            if state["idx"] == 1 and not _validate_step_two():
+                return
+            if state["idx"] < len(steps) - 1:
+                state["idx"] += 1
+                _update_step()
+
+        def _back() -> None:
+            if state["idx"] > 0:
+                state["idx"] -= 1
+                _update_step()
+
+        def _done() -> None:
+            if not _validate_step_two():
+                state["idx"] = 1
+                _update_step()
+                return
+            self.result = folders_data
+            root.destroy()
+
+        nav = ctk.CTkFrame(root, fg_color="transparent")
+        nav.pack(pady=16)
+        back_btn = ctk.CTkButton(
+            nav,
+            text="Back",
+            width=100,
+            fg_color=t["btn_bg"],
+            text_color=t["btn_fg"],
+            hover_color=t["btn_active"],
+            command=_back,
+        )
+        back_btn.pack(side="left", padx=8)
+        next_btn = ctk.CTkButton(
+            nav,
+            text="Next",
+            width=110,
+            fg_color=t["accent"],
+            text_color="#1e1e2e",
+            hover_color=t["btn_active"],
+            command=_next,
+        )
+        next_btn.pack(side="left", padx=8)
+        finish_btn = ctk.CTkButton(
+            nav,
             text="Complete setup & start in tray ✓",
+            width=240,
             fg_color=t["btn_bg"],
             text_color=t["btn_fg"],
             hover_color=t["accent"],
-            font=_font(12),
-            corner_radius=10,
             command=_done,
-        ).pack(side="left", padx=10)
+        )
+        finish_btn.pack(side="left", padx=8)
+
+        _update_step()
 
         root.mainloop()
         if self.result:
