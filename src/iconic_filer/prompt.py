@@ -731,10 +731,10 @@ class SetupWizard:
         root.title("Iconic File Filer — Setup Wizard")
         root.resizable(False, False)
 
-        w, h = 640, 560
-        sx = root.winfo_screenwidth() // 2 - w // 2
-        sy = root.winfo_screenheight() // 2 - h // 2
-        root.geometry(f"{w}x{h}+{sx}+{sy}")
+        window_width, window_height = 640, 560
+        sx = root.winfo_screenwidth() // 2 - window_width // 2
+        sy = root.winfo_screenheight() // 2 - window_height // 2
+        root.geometry(f"{window_width}x{window_height}+{sx}+{sy}")
 
         ctk.CTkLabel(
             root,
