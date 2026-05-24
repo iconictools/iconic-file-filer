@@ -34,7 +34,7 @@ Every other file-watching tool eventually starts sorting files automatically (au
 | **DND integration** | Pauses when Windows Focus Assist is active |
 | **Undo** | One-click revert from the tray menu, plus clickable history |
 | **Dashboard** | Quick view of recent actions, stats, and pending files |
-| **Batch processing** | Single batch window for newly detected files (move / skip / whitelist / snooze) |
+| **Pending file list** | Optional list view to review queued files with sorting, filtering, and multi-select |
 | **Settings UI** | Full tabbed settings dialog with watched-folder + destination add/remove management |
 | **Rule management UI** | View, add, edit, and delete explicit rules visually |
 | **Dark / Light theme** | Catppuccin-inspired themes via customtkinter — beautiful rounded widgets |
@@ -139,7 +139,7 @@ Config is stored in `~/.iconic-filer/config.json`. Example:
     "catch_folders": false,
     "pattern_rules_enabled": true,
     "pause_on_dnd": false,
-    "batch_mode_style": "batch-list"
+    "batch_mode_style": "one-by-one"
   },
   "ignore_patterns": [
     "~$*",
@@ -212,8 +212,8 @@ MIT
 1. **Startup flow + first launch setup**  
    Every app launch shows a short startup window (so startup is never tray-only). On the very first run, the Setup Wizard opens and asks you to choose one or more folders to watch (e.g. `Downloads`) and one or more destination folders for each watched folder (e.g. `Documents`, `Pictures`, `Work`). You can add/remove folders at any time from **Settings → Folders**.
 
-2. **Detected files action window**  
-   Newly detected files are grouped into a single batch window instead of spawning one popup per file. For each file you can choose: **Move**, **Skip**, **Whitelist**, or **Snooze**.
+2. **Detected files action flow**  
+   Newly detected files prompt you one-by-one. When multiple files are queued, open the **Pending file list** to filter, sort, and send selected files back to the main prompt.
 
 3. **Focus mode**  
    Focus mode queues all incoming files instead of showing prompts. The tray icon turns red and displays a badge with the pending count. Toggle focus mode from the tray context menu. When you turn it off the queue is processed according to the **batch mode style** setting (one-by-one or batch list).

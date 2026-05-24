@@ -16,7 +16,7 @@ from iconic_filer.classifier import suggest_destinations
 from iconic_filer.config import Config
 from iconic_filer.conflict_ui import resolve_conflict
 from iconic_filer.constants import DEFAULT_UNSORTED_DIR
-from iconic_filer.dashboard_ui import show_batch_list, show_dashboard
+from iconic_filer.dashboard_ui import show_dashboard, show_file_list
 from iconic_filer.duplicate import find_duplicate
 from iconic_filer.history import History
 from iconic_filer.ipc import IPCServer
@@ -131,7 +131,7 @@ class App:
             on_open_manual=self._show_manual,
             on_add_folder=self._show_folder_setup,
             on_rescan=self._trigger_rescan,
-            on_process_pending=self._process_batch_queue,
+            on_process_pending=self._show_file_list,
             on_quit=self._quit,
         )
         self._ipc_server = IPCServer(on_command=self._handle_ipc_command)
@@ -343,7 +343,7 @@ class App:
     # File event handling
     # ------------------------------------------------------------------
 
-    def _on_file_detected(self, filepath: str) -> None:
+    def _on_file_detected(self, filepath: str, force_prompt: bool = False) -> None:
         """Called by the watcher when a new/stable file or folder is detected."""
         logger.info("Detected: %s", filepath)
 
@@ -407,7 +407,6 @@ class App:
         destinations = self.config.get_folder_destinations(parent_monitored)
         if not destinations:
             logger.debug("No destinations configured for %s", filepath)
-            return
 
         # Merge global and per-folder extension maps (per-folder takes priority)
         folder_ext_map = self.config.get_folder_extension_map(parent_monitored)
@@ -428,8 +427,8 @@ class App:
             filepath, destinations, merged_ext_map
         )
 
-        style = self.config.get_setting("batch_mode_style", "batch-list")
-        if style == "batch-list":
+        style = self.config.get_setting("batch_mode_style", "one-by-one")
+        if style in ("batch-list", "file-list") and not force_prompt:
             with self._lock:
                 if filepath not in self._batch_queue:
                     self._batch_queue.append(filepath)
@@ -475,6 +474,7 @@ class App:
             history=self.history,
             on_snooze=_on_snooze,
             on_save_destination=_on_save_destination,
+            on_delete=self._delete_item,
             always_rule_default=self.config.get_setting("prompt_always_rule", False),
             auto_accept_seconds=auto_accept_secs,
         )
@@ -538,6 +538,31 @@ class App:
     # ------------------------------------------------------------------
     # File operations
     # ------------------------------------------------------------------
+
+    def _delete_item(self, path: str) -> None:
+        """Delete a file or folder from disk."""
+        try:
+            if os.path.isdir(path):
+                shutil.rmtree(path)
+            else:
+                os.remove(path)
+            logger.info("Deleted %s", path)
+            if self.config.get_setting("native_notifications", True):
+                fallback = self.config.get_setting("notification_fallback", "log-only")
+                notify(
+                    "Item deleted",
+                    os.path.basename(path) or path,
+                    fallback_strategy=fallback,
+                )
+        except OSError as exc:
+            logger.error("Failed to delete %s: %s", path, exc)
+            if self.config.get_setting("native_notifications", True):
+                fallback = self.config.get_setting("notification_fallback", "log-only")
+                notify(
+                    "Delete failed",
+                    f"{os.path.basename(path) or path}: {exc}",
+                    fallback_strategy=fallback,
+                )
 
     def _move_file(self, src: str, dest_dir: str, source_folder: str | None = None) -> None:
         """Move *src* (file or folder) into *dest_dir*, recording the action.
@@ -723,15 +748,10 @@ class App:
 
         def _run() -> None:
             try:
-                show_batch_list(
-                    self.config,
-                    self.rules,
-                    self.watcher,
+                show_file_list(
                     queue,
                     theme_name,
-                    self._move_file,
-                    on_whitelist=self.config.add_to_whitelist,
-                    on_snooze=self._on_snooze_file,
+                    self._process_pending_selection,
                     on_defer=self._requeue_batch_items,
                 )
             finally:
@@ -1143,13 +1163,51 @@ class App:
         )
         t.start()
 
-    def _process_batch_queue(self) -> None:
-        """Process all files queued during focus mode.
+    def _show_file_list(self) -> None:
+        """Open the pending file list window."""
+        with self._lock:
+            if self._batch_window_open:
+                return
+            queue = list(self._batch_queue)
+            self._batch_queue.clear()
+            if self._batch_open_timer is not None and self._batch_open_timer.is_alive():
+                self._batch_open_timer.cancel()
+            self._batch_open_timer = None
+        self.tray.set_pending(False)
+        if not queue:
+            logger.info("Pending list requested, but no queued files remain.")
+            if self.config.get_setting("native_notifications", True):
+                fallback = self.config.get_setting("notification_fallback", "log-only")
+                notify(
+                    "No pending files",
+                    "You're all caught up.",
+                    fallback_strategy=fallback,
+                )
+            return
+        with self._lock:
+            self._batch_window_open = True
+        theme_name = self.config.get_setting("theme", "dark")
 
-        Respects the ``batch_mode_style`` setting (Q6.2):
-        - ``'one-by-one'``: process each file individually
-        - ``'batch-list'``: show a batch window
-        """
+        def _run() -> None:
+            try:
+                show_file_list(
+                    queue,
+                    theme_name,
+                    self._process_pending_selection,
+                    on_defer=self._requeue_batch_items,
+                )
+            finally:
+                with self._lock:
+                    self._batch_window_open = False
+                    queued_count = len(self._batch_queue)
+                if queued_count:
+                    self.tray.set_pending(True, queued_count)
+                    self._schedule_batch_window()
+
+        threading.Thread(target=_run, daemon=True).start()
+
+    def _process_batch_queue(self) -> None:
+        """Review files queued during focus mode."""
         with self._lock:
             if self._batch_window_open:
                 # A batch window is already visible; leave the queue untouched
@@ -1172,19 +1230,18 @@ class App:
                 )
             return
 
-        style = self.config.get_setting("batch_mode_style", "batch-list")
-        if style == "batch-list" and queue:
+        style = self.config.get_setting("batch_mode_style", "one-by-one")
+        if style in ("batch-list", "file-list") and queue:
             with self._lock:
                 self._batch_window_open = True
             theme_name = self.config.get_setting("theme", "dark")
 
             def _run() -> None:
                 try:
-                    show_batch_list(
-                        self.config, self.rules, self.watcher, queue,
-                        theme_name, self._move_file,
-                        on_whitelist=self.config.add_to_whitelist,
-                        on_snooze=self._on_snooze_file,
+                    show_file_list(
+                        queue,
+                        theme_name,
+                        self._process_pending_selection,
                         on_defer=self._requeue_batch_items,
                     )
                 finally:
@@ -1202,6 +1259,14 @@ class App:
                     self._on_file_detected(filepath)
                 else:
                     logger.info("Skipped queued item that no longer exists: %s", filepath)
+
+    def _process_pending_selection(self, paths: list[str]) -> None:
+        """Send selected pending files back through the prompt flow."""
+        for filepath in paths:
+            if os.path.exists(filepath):
+                self._on_file_detected(filepath, force_prompt=True)
+            else:
+                logger.info("Skipped queued item that no longer exists: %s", filepath)
 
     def _delete_all_user_data(self) -> None:
         """Delete all user data from disk and terminate the running app."""

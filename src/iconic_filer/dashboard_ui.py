@@ -1,4 +1,4 @@
-"""Extracted dashboard and batch-list windows for Iconic File Filer."""
+"""Extracted dashboard and pending-list windows for Iconic File Filer."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import sqlite3
 import threading
 import time
 import tkinter as tk
-from tkinter import messagebox
+from tkinter import messagebox, ttk
 from typing import Any, Callable
 
 import customtkinter as ctk
@@ -44,9 +44,12 @@ def show_dashboard(
     root.title("Iconic File Filer — Activity")
     root.geometry("600x680")
 
+    body = ctk.CTkScrollableFrame(root)
+    body.pack(fill="both", expand=True)
+
     # ── Header ────────────────────────────────────────────────────────
     ctk.CTkLabel(
-        root,
+        body,
         text="📊 Activity & Queue",
         font=ctk.CTkFont(size=18, weight="bold"),
         text_color=theme["accent"],
@@ -57,20 +60,20 @@ def show_dashboard(
         pending = sum(1 for p in batch_queue if os.path.exists(p))
     if pending:
         ctk.CTkLabel(
-            root,
+            body,
             text=f"⏳ {pending} file(s) pending (focus mode)",
             font=ctk.CTkFont(size=11),
             text_color=theme["danger"],
         ).pack(pady=4)
         ctk.CTkLabel(
-            root,
-            text="Next step: use the tray menu and click “Sort pending files”.",
+            body,
+            text="Next step: use the tray menu and open the pending file list.",
             font=ctk.CTkFont(size=10),
             text_color=theme["muted"],
         ).pack(pady=(0, 4))
 
     if on_rescan is not None:
-        actions = ctk.CTkFrame(root, fg_color="transparent")
+        actions = ctk.CTkFrame(body, fg_color="transparent")
         actions.pack(fill="x", padx=24, pady=(2, 6))
         ctk.CTkButton(
             actions,
@@ -89,7 +92,7 @@ def show_dashboard(
     today = history.count_since(time.time() - 86400)
     week = history.count_since(time.time() - 7 * 86400)
 
-    stats_frame = ctk.CTkFrame(root, corner_radius=10)
+    stats_frame = ctk.CTkFrame(body, corner_radius=10)
     stats_frame.pack(fill="x", padx=24, pady=8)
     stats_inner = ctk.CTkFrame(stats_frame, fg_color="transparent")
     stats_inner.pack(padx=16, pady=12)
@@ -116,7 +119,7 @@ def show_dashboard(
             if dest_name:
                 dest_counts[dest_name] = dest_counts.get(dest_name, 0) + 1
 
-        tax_frame = ctk.CTkFrame(root, corner_radius=10)
+        tax_frame = ctk.CTkFrame(body, corner_radius=10)
         tax_frame.pack(fill="x", padx=24, pady=4)
         tax_inner = ctk.CTkFrame(tax_frame, fg_color="transparent")
         tax_inner.pack(padx=16, pady=8, fill="x")
@@ -143,7 +146,7 @@ def show_dashboard(
 
     # ── Inbox Zero progress bar ───────────────────────────────────────
     if pending > 0 or today > 0:
-        progress_frame = ctk.CTkFrame(root, fg_color="transparent")
+        progress_frame = ctk.CTkFrame(body, fg_color="transparent")
         progress_frame.pack(fill="x", padx=24, pady=4)
         processed = today - pending if today > pending else today
         ratio = max(0.0, min(1.0, processed / max(today, 1)))
@@ -158,7 +161,7 @@ def show_dashboard(
         pbar.pack(anchor="w", pady=(2, 0))
 
     # ── Activity heatmap (last 84 days = 12 weeks) ────────────────────
-    heatmap_frame = ctk.CTkFrame(root, corner_radius=10)
+    heatmap_frame = ctk.CTkFrame(body, corner_radius=10)
     heatmap_frame.pack(fill="x", padx=24, pady=8)
     ctk.CTkLabel(
         heatmap_frame, text="Activity — last 12 weeks",
@@ -217,7 +220,7 @@ def show_dashboard(
         all_achs = achs.all_status()
         achs.close()
 
-        ach_frame = ctk.CTkFrame(root, corner_radius=10)
+        ach_frame = ctk.CTkFrame(body, corner_radius=10)
         ach_frame.pack(fill="x", padx=24, pady=4)
         ctk.CTkLabel(
             ach_frame, text="🏆 Achievements",
@@ -225,19 +228,28 @@ def show_dashboard(
             text_color=theme["accent"],
         ).pack(anchor="w", padx=16, pady=(10, 4))
 
-        ach_grid = ctk.CTkFrame(ach_frame, fg_color="transparent")
-        ach_grid.pack(padx=16, pady=(0, 10), fill="x")
-        for idx, ach in enumerate(all_achs):
-            col_idx = idx % 3
-            row_idx = idx // 3
+        ach_list = ctk.CTkScrollableFrame(ach_frame, height=140, fg_color="transparent")
+        ach_list.pack(padx=16, pady=(0, 10), fill="x")
+        for ach in all_achs:
             color = theme["success"] if ach.unlocked else theme["muted"]
+            row = ctk.CTkFrame(ach_list, fg_color="transparent")
+            row.pack(fill="x", pady=2)
             ctk.CTkLabel(
-                ach_grid,
+                row,
                 text=f"{ach.emoji} {ach.name}",
-                font=ctk.CTkFont(size=10),
+                font=ctk.CTkFont(size=11, weight="bold"),
                 text_color=color,
                 anchor="w",
-            ).grid(row=row_idx, column=col_idx, sticky="w", padx=(0, 12), pady=1)
+            ).pack(anchor="w")
+            ctk.CTkLabel(
+                row,
+                text=ach.description,
+                font=ctk.CTkFont(size=9),
+                text_color=theme["muted"],
+                anchor="w",
+                justify="left",
+                wraplength=520,
+            ).pack(anchor="w")
     except Exception:
         logger.debug("Achievements panel unavailable", exc_info=True)
 
@@ -254,20 +266,20 @@ def show_dashboard(
         pass
 
     ctk.CTkLabel(
-        root,
+        body,
         text=f"Active rules: {rules_count}",
         font=ctk.CTkFont(size=10),
     ).pack(padx=24, anchor="w", pady=(4, 4))
 
     # ── Undo history ──────────────────────────────────────────────────
     ctk.CTkLabel(
-        root,
+        body,
         text="Recent Actions (select to undo back to that point):",
         font=ctk.CTkFont(size=11, weight="bold"),
         text_color=theme["accent"],
     ).pack(pady=(8, 4), padx=24, anchor="w")
 
-    history_frame = ctk.CTkFrame(root, fg_color="transparent")
+    history_frame = ctk.CTkFrame(body, fg_color="transparent")
     history_frame.pack(fill="both", expand=True, padx=24, pady=4)
 
     # Use tk.Listbox (no CTk equivalent) styled to match the theme
@@ -314,7 +326,7 @@ def show_dashboard(
             dst_name = os.path.basename(os.path.dirname(action["dst_path"]))
             history_list.insert("end", f"{status}  {src_name}  →  {dst_name}")
 
-    btn_frame = ctk.CTkFrame(root, fg_color="transparent")
+    btn_frame = ctk.CTkFrame(body, fg_color="transparent")
     btn_frame.pack(pady=10)
     ctk.CTkButton(
         btn_frame, text="Undo to selected",
@@ -590,4 +602,219 @@ def show_batch_list(
     )
     later_btn.pack(side="left", padx=6)
 
+    root.mainloop()
+
+
+def show_file_list(
+    queue: list[str],
+    theme_name: str,
+    on_process: Callable[[list[str]], None],
+    on_defer: Callable[[list[str]], None] | None = None,
+) -> None:
+    """Show a sortable, filterable list of pending files."""
+    theme = get_theme(theme_name)
+    apply_ctk_appearance(theme_name)
+
+    root = ctk.CTk()
+    root.title("Iconic File Filer — File List")
+    root.geometry("760x520")
+    root.minsize(640, 420)
+
+    ctk.CTkLabel(
+        root,
+        text="🗂 Pending Files",
+        font=ctk.CTkFont(size=18, weight="bold"),
+        text_color=theme["accent"],
+    ).pack(pady=(18, 4))
+    ctk.CTkLabel(
+        root,
+        text="Select one or more files and send them to the main prompt.",
+        font=ctk.CTkFont(size=10),
+        text_color=theme["muted"],
+    ).pack(pady=(0, 8))
+
+    filter_frame = ctk.CTkFrame(root, fg_color="transparent")
+    filter_frame.pack(fill="x", padx=18, pady=(0, 6))
+    ctk.CTkLabel(
+        filter_frame,
+        text="Filter:",
+        font=ctk.CTkFont(size=10, weight="bold"),
+        text_color=theme["muted"],
+    ).pack(side="left")
+    filter_var = tk.StringVar(value="")
+    filter_entry = ctk.CTkEntry(filter_frame, textvariable=filter_var, height=28)
+    filter_entry.pack(side="left", fill="x", expand=True, padx=(8, 0))
+
+    list_frame = ctk.CTkFrame(root, corner_radius=10)
+    list_frame.pack(fill="both", expand=True, padx=18, pady=(0, 10))
+
+    style = ttk.Style()
+    try:
+        style.theme_use("default")
+    except tk.TclError:
+        pass
+    style.configure(
+        "Treeview",
+        background=theme["list_bg"],
+        fieldbackground=theme["list_bg"],
+        foreground=theme["list_fg"],
+        rowheight=24,
+        borderwidth=0,
+    )
+    style.map(
+        "Treeview",
+        background=[("selected", theme["list_select_bg"])],
+        foreground=[("selected", theme["list_select_fg"])],
+    )
+
+    columns = ("name", "folder", "modified", "size")
+    tree = ttk.Treeview(
+        list_frame,
+        columns=columns,
+        show="headings",
+        selectmode="extended",
+    )
+    tree.heading("name", text="Name")
+    tree.heading("folder", text="Folder")
+    tree.heading("modified", text="Modified")
+    tree.heading("size", text="Size")
+    tree.column("name", width=220, anchor="w")
+    tree.column("folder", width=260, anchor="w")
+    tree.column("modified", width=140, anchor="w")
+    tree.column("size", width=80, anchor="e")
+
+    scrollbar = ttk.Scrollbar(list_frame, orient="vertical", command=tree.yview)
+    tree.configure(yscrollcommand=scrollbar.set)
+    tree.pack(side="left", fill="both", expand=True)
+    scrollbar.pack(side="right", fill="y")
+
+    def _format_size(size_bytes: int) -> str:
+        if size_bytes < 1024:
+            return f"{size_bytes} B"
+        if size_bytes < 1024 * 1024:
+            return f"{size_bytes / 1024:.1f} KB"
+        if size_bytes < 1024 * 1024 * 1024:
+            return f"{size_bytes / (1024 * 1024):.1f} MB"
+        return f"{size_bytes / (1024 * 1024 * 1024):.1f} GB"
+
+    all_items: list[dict[str, Any]] = []
+    for path in queue:
+        if not os.path.exists(path):
+            continue
+        try:
+            stat = os.stat(path)
+        except OSError:
+            continue
+        all_items.append(
+            {
+                "path": path,
+                "name": os.path.basename(path) or path,
+                "folder": os.path.basename(os.path.dirname(path)) or os.path.dirname(path),
+                "folder_full": os.path.dirname(path),
+                "modified_ts": stat.st_mtime,
+                "modified": time.strftime("%Y-%m-%d %H:%M", time.localtime(stat.st_mtime)),
+                "size_bytes": stat.st_size if os.path.isfile(path) else 0,
+                "size": _format_size(stat.st_size) if os.path.isfile(path) else "—",
+            }
+        )
+
+    sort_column: list[str] = ["modified_ts"]
+    sort_reverse: list[bool] = [True]
+
+    def _matches_filter(item: dict[str, Any]) -> bool:
+        raw = filter_var.get().strip().lower()
+        if not raw:
+            return True
+        tokens = [t for t in raw.replace(",", " ").split() if t]
+        haystack = f"{item['name']} {item['folder_full']}".lower()
+        return all(token in haystack for token in tokens)
+
+    def _render() -> None:
+        tree.delete(*tree.get_children())
+        visible = [item for item in all_items if _matches_filter(item)]
+        key = sort_column[0]
+        reverse = sort_reverse[0]
+        visible.sort(key=lambda item: item.get(key, ""), reverse=reverse)
+        for item in visible:
+            tree.insert(
+                "",
+                "end",
+                iid=item["path"],
+                values=(item["name"], item["folder"], item["modified"], item["size"]),
+            )
+
+    def _set_sort(column: str) -> None:
+        if sort_column[0] == column:
+            sort_reverse[0] = not sort_reverse[0]
+        else:
+            sort_column[0] = column
+            sort_reverse[0] = False
+        _render()
+
+    tree.heading("name", command=lambda: _set_sort("name"))
+    tree.heading("folder", command=lambda: _set_sort("folder"))
+    tree.heading("modified", command=lambda: _set_sort("modified_ts"))
+    tree.heading("size", command=lambda: _set_sort("size_bytes"))
+
+    def _process_paths(paths: list[str]) -> None:
+        if not paths:
+            return
+        on_process(paths)
+        remaining = [item for item in all_items if item["path"] not in paths]
+        all_items.clear()
+        all_items.extend(remaining)
+        _render()
+
+    def _open_selected(_event: object | None = None) -> None:
+        selection = list(tree.selection())
+        _process_paths(selection)
+
+    def _open_all() -> None:
+        _process_paths([item["path"] for item in all_items])
+        root.destroy()
+
+    tree.bind("<Double-1>", _open_selected)
+    tree.bind("<Return>", _open_selected)
+    filter_entry.bind("<KeyRelease>", lambda _event: _render())
+
+    action_frame = ctk.CTkFrame(root, fg_color="transparent")
+    action_frame.pack(pady=(0, 14))
+    ctk.CTkButton(
+        action_frame,
+        text="Open selected",
+        fg_color=theme["accent"],
+        text_color="#1e1e2e",
+        hover_color=theme["btn_active"],
+        font=ctk.CTkFont(size=10, weight="bold"),
+        corner_radius=8,
+        command=_open_selected,
+    ).pack(side="left", padx=6)
+    ctk.CTkButton(
+        action_frame,
+        text="Open all",
+        fg_color=theme["btn_bg"],
+        text_color=theme["btn_fg"],
+        hover_color=theme["muted"],
+        font=ctk.CTkFont(size=10),
+        corner_radius=8,
+        command=_open_all,
+    ).pack(side="left", padx=6)
+    ctk.CTkButton(
+        action_frame,
+        text="Close",
+        fg_color=theme["btn_bg"],
+        text_color=theme["btn_fg"],
+        hover_color=theme["muted"],
+        font=ctk.CTkFont(size=10),
+        corner_radius=8,
+        command=lambda: _on_close(),
+    ).pack(side="left", padx=6)
+
+    def _on_close() -> None:
+        if on_defer is not None:
+            on_defer([item["path"] for item in all_items])
+        root.destroy()
+
+    root.protocol("WM_DELETE_WINDOW", _on_close)
+    _render()
     root.mainloop()

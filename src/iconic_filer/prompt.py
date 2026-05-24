@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import tkinter as tk
-from tkinter import filedialog, messagebox
+from tkinter import filedialog, messagebox, simpledialog
 from typing import Any, Callable
 
 import customtkinter as ctk
@@ -87,6 +87,7 @@ class SortPrompt:
         history: Any = None,
         on_snooze: Callable[[], None] | None = None,
         on_save_destination: Callable[[str], None] | None = None,
+        on_delete: Callable[[str], None] | None = None,
         always_rule_default: bool = False,
         auto_accept_seconds: int = 0,
     ) -> None:
@@ -113,6 +114,8 @@ class SortPrompt:
         on_save_destination:
             Called with a folder path when the user picks a new destination
             and confirms they want it saved as a permanent destination.
+        on_delete:
+            Called with the file path when the user chooses to delete it.
         always_rule_default:
             Whether the "Always send .ext files here" checkbox is pre-checked.
         auto_accept_seconds:
@@ -129,6 +132,7 @@ class SortPrompt:
         self._history = history
         self._on_snooze = on_snooze
         self._on_save_destination = on_save_destination
+        self._on_delete = on_delete
         self._always_rule_default = always_rule_default
         self._auto_accept_seconds = auto_accept_seconds
 
@@ -329,37 +333,93 @@ class SortPrompt:
             card_container = ctk.CTkFrame(root, fg_color="transparent")
         card_container.pack(fill="x", padx=20, pady=(0, 6))
 
+        def _append_destination(dest: str, is_last: bool = False) -> None:
+            if dest in _key_dests:
+                return
+            _key_dests.append(dest)
+            self._dest_card(card_container, len(_key_dests) - 1, dest, is_last, t, _choose)
+
         # "Same as last time" appears first with a distinct visual
         if last_dest is not None:
-            _key_dests.append(last_dest)
-            self._dest_card(card_container, 0, last_dest, True, t, _choose)
+            _append_destination(last_dest, True)
 
-        btn_idx = len(_key_dests)  # starts at 1 if last_dest was added
         for dest in self._destinations:
-            if dest in _key_dests:
-                continue
-            _key_dests.append(dest)
-            self._dest_card(card_container, btn_idx, dest, False, t, _choose)
-            btn_idx += 1
+            _append_destination(dest)
+
+        if not _key_dests:
+            ctk.CTkLabel(
+                card_container,
+                text="No destination folders yet. Add one to start moving files.",
+                font=_font(10),
+                text_color=t["muted"],
+                anchor="w",
+                justify="left",
+            ).pack(anchor="w", pady=(0, 6))
+
+        action_container = ctk.CTkFrame(root, fg_color="transparent")
+        action_container.pack(fill="x", padx=20, pady=(0, 6))
 
         # ── "Add new folder to list" card ─────────────────────────────
         # Picks a folder, saves it permanently, then routes the file there.
         if self._on_save_destination is not None:
             _save_dest_cb = self._on_save_destination
 
-            def _add_and_send() -> None:
+            def _add_existing_and_send() -> None:
                 folder = filedialog.askdirectory(
                     title="Choose folder to add to your list"
                 )
                 if not folder:
                     return
                 _save_dest_cb(folder)
+                _append_destination(folder)
                 _choose(folder)
 
+            def _create_new_folders() -> None:
+                parent_dir = filedialog.askdirectory(
+                    title="Choose where to create new folders"
+                )
+                if not parent_dir:
+                    return
+                names = simpledialog.askstring(
+                    "Create new folders",
+                    "Enter one or more folder names (comma- or line-separated):",
+                    parent=root,
+                )
+                if not names:
+                    return
+                created: list[str] = []
+                for raw in names.replace("\n", ",").split(","):
+                    name = raw.strip()
+                    if not name:
+                        continue
+                    path = os.path.join(parent_dir, name)
+                    try:
+                        os.makedirs(path, exist_ok=True)
+                    except OSError as exc:
+                        messagebox.showwarning(
+                            "Could not create folder",
+                            f"{path}\n\n{exc}",
+                            parent=root,
+                        )
+                        continue
+                    _save_dest_cb(path)
+                    _append_destination(path)
+                    created.append(path)
+                if not created:
+                    return
+                if len(created) == 1:
+                    _choose(created[0])
+                else:
+                    messagebox.showinfo(
+                        "Folders created",
+                        f"Created {len(created)} folders. Pick one above to move this file.",
+                        parent=root,
+                    )
+
             ctk.CTkButton(
-                card_container,
-                text="➕  Add new folder to my list",
-                height=44,
+                action_container,
+                text="➕  Add folder",
+                height=40,
                 fg_color="transparent",
                 border_color=t["accent"],
                 border_width=1,
@@ -368,8 +428,22 @@ class SortPrompt:
                 font=_font(11),
                 corner_radius=10,
                 anchor="w",
-                command=_add_and_send,
+                command=_add_existing_and_send,
             ).pack(fill="x", pady=(6, 3))
+            ctk.CTkButton(
+                action_container,
+                text="🆕  Create new folder(s)",
+                height=40,
+                fg_color="transparent",
+                border_color=t["accent"],
+                border_width=1,
+                text_color=t["accent"],
+                hover_color=t["btn_bg"],
+                font=_font(11),
+                corner_radius=10,
+                anchor="w",
+                command=_create_new_folders,
+            ).pack(fill="x", pady=(0, 3))
 
         # ── "One-time send" card ───────────────────────────────────────
         # Picks a folder and sends the file there — nothing is saved.
@@ -382,7 +456,7 @@ class SortPrompt:
             _choose(folder)
 
         ctk.CTkButton(
-            card_container,
+            action_container,
             text="📁  Send to folder (one-time, not saved)",
             height=44,
             fg_color="transparent",
@@ -446,6 +520,7 @@ class SortPrompt:
         whitelisted = [False]
         quick_added = [False]
         snoozed = [False]
+        deleted = [False]
 
         _ghost_kw: dict = dict(
             fg_color="transparent",
@@ -515,6 +590,28 @@ class SortPrompt:
             command=root.destroy,
             **_ghost_kw,
         ).pack(side="right")
+
+        if self._on_delete is not None:
+            _delete_cb = self._on_delete
+
+            def _do_delete() -> None:
+                if not messagebox.askyesno(
+                    "Delete file",
+                    "Permanently delete this item?",
+                    parent=root,
+                ):
+                    return
+                deleted[0] = True
+                root.destroy()
+                _delete_cb(self._filepath)
+
+            ctk.CTkButton(
+                footer,
+                text="🗑 Delete",
+                text_color=t["danger"],
+                command=_do_delete,
+                **_ghost_kw,
+            ).pack(side="right", padx=(0, 4))
 
         # Keyboard hint in footer
         ctk.CTkLabel(
@@ -588,6 +685,9 @@ class SortPrompt:
             return
 
         if whitelisted[0]:
+            self._on_done(self._filepath, None, False)
+            return
+        if deleted[0]:
             self._on_done(self._filepath, None, False)
             return
 
