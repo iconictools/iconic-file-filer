@@ -896,10 +896,7 @@ def _build_system_tab(
                                               padx=8, pady=(12, 4))
     row += 1
     _lbl(f, "Pending review style:", t).grid(row=row, column=0, sticky="w", padx=8, pady=3)
-    current_style = cfg.get_setting("batch_mode_style", "one-by-one")
-    if current_style == "batch-list":
-        current_style = "file-list"
-    batch_var = tk.StringVar(value=current_style)
+    batch_var = tk.StringVar(value=cfg.get_setting("batch_mode_style", "one-by-one"))
     ctk.CTkOptionMenu(f, variable=batch_var, values=["one-by-one", "file-list"],
                       font=ctk.CTkFont(size=10)).grid(row=row, column=1, sticky="ew",
                                                        padx=(0, 8), pady=3)

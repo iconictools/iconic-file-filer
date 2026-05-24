@@ -388,7 +388,10 @@ class SortPrompt:
                 if not names:
                     return
                 created: list[str] = []
-                for raw in names.replace("\n", ",").split(","):
+                parts: list[str] = []
+                for line in names.splitlines():
+                    parts.extend(line.split(","))
+                for raw in parts:
                     name = raw.strip()
                     if not name:
                         continue

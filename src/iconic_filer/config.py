@@ -152,6 +152,13 @@ class Config:
                 migrated = True
         if migrated:
             logger.info("Migrated monitored_folders to per-folder dict format.")
+
+        settings = self._data.setdefault("global_settings", {})
+        if settings.get("batch_mode_style") == "batch-list":
+            settings["batch_mode_style"] = "file-list"
+            migrated = True
+
+        if migrated:
             self.save()
 
     def save(self) -> None:

@@ -344,7 +344,15 @@ class App:
     # ------------------------------------------------------------------
 
     def _on_file_detected(self, filepath: str, force_prompt: bool = False) -> None:
-        """Called by the watcher when a new/stable file or folder is detected."""
+        """Called when a new/stable file or folder is detected.
+
+        Parameters
+        ----------
+        filepath:
+            Absolute path of the detected file/folder.
+        force_prompt:
+            When True, bypasses queueing and always shows the prompt immediately.
+        """
         logger.info("Detected: %s", filepath)
 
         # Skip files that live inside a configured destination folder.
@@ -429,7 +437,7 @@ class App:
         )
 
         style = self.config.get_setting("batch_mode_style", "one-by-one")
-        if style in ("batch-list", "file-list") and not force_prompt:
+        if style == "file-list" and not force_prompt:
             with self._lock:
                 if filepath not in self._batch_queue:
                     self._batch_queue.append(filepath)
@@ -1232,7 +1240,7 @@ class App:
             return
 
         style = self.config.get_setting("batch_mode_style", "one-by-one")
-        if style in ("batch-list", "file-list") and queue:
+        if style == "file-list" and queue:
             with self._lock:
                 self._batch_window_open = True
             theme_name = self.config.get_setting("theme", "dark")

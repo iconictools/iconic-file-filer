@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import shutil
 import os
 import sqlite3
 import threading
@@ -525,7 +526,7 @@ def show_batch_list(
                     counters["snoozed"] += 1
                 else:
                     counters["skipped"] += 1
-            except Exception as exc:  # noqa: BLE001
+            except (OSError, shutil.Error, RuntimeError, ValueError) as exc:
                 errors += 1
                 counters["skipped"] += 1
                 logger.error(
