@@ -1104,7 +1104,7 @@ class App:
             except Exception:
                 logger.error("UI action failed: %s", label, exc_info=True)
 
-        if threading.current_thread() is threading.main_thread():
+        if threading.current_thread() == threading.main_thread():
             _wrapped()
         else:
             threading.Thread(target=_wrapped, daemon=True).start()
