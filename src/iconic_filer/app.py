@@ -1104,10 +1104,9 @@ class App:
             except Exception:
                 logger.error("UI action failed: %s", label, exc_info=True)
 
-        if threading.current_thread() == threading.main_thread():
-            _wrapped()
-        else:
-            threading.Thread(target=_wrapped, daemon=True).start()
+        if threading.current_thread() != threading.main_thread():
+            logger.debug("UI action requested off main thread: %s", label)
+        _wrapped()
 
     def _show_settings(self) -> None:
         """Open the settings dialog."""
