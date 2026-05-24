@@ -1092,7 +1092,7 @@ class App:
                 logger.warning("Could not rename to sorted name: %s", exc)
 
     def _run_ui(self, action: Callable[[], None], label: str) -> None:
-        """Run a UI action on the main thread when possible."""
+        """Run a UI action in a background thread."""
         def _wrapped() -> None:
             try:
                 action()
