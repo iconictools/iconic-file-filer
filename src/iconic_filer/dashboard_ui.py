@@ -8,10 +8,12 @@ import sqlite3
 import threading
 import time
 import tkinter as tk
+from tkinter import messagebox
 from typing import Any, Callable
 
 import customtkinter as ctk
 
+from iconic_filer.notifications import notify
 from iconic_filer.themes import apply_ctk_appearance, get_theme
 
 logger = logging.getLogger(__name__)
@@ -362,6 +364,28 @@ def show_batch_list(
         font=ctk.CTkFont(size=16, weight="bold"),
         text_color=theme["accent"],
     ).pack(pady=(20, 10))
+    ctk.CTkLabel(
+        root,
+        text=(
+            "This is the batch sorting window. New items detected while this window is open "
+            "stay queued in the tray and appear in the next batch."
+        ),
+        font=ctk.CTkFont(size=10),
+        text_color=theme["muted"],
+        wraplength=560,
+        justify="center",
+    ).pack(pady=(0, 4))
+    ctk.CTkLabel(
+        root,
+        text=(
+            "Tip: For the step-by-step sorting prompt, open Settings → System and set "
+            'Batch mode style to "one-by-one".'
+        ),
+        font=ctk.CTkFont(size=10),
+        text_color=theme["muted"],
+        wraplength=560,
+        justify="center",
+    ).pack(pady=(0, 10))
 
     scroll = ctk.CTkScrollableFrame(root, height=330)
     scroll.pack(fill="x", padx=24, pady=4)
@@ -438,38 +462,106 @@ def show_batch_list(
         ).grid(row=ui_row, column=2, sticky="ew", pady=3, padx=(8, 0))
         rows.append((filepath, dest_var, action_var))
 
-    counters = {"moved": 0, "whitelisted": 0, "snoozed": 0, "skipped": 0}
+    status_var = tk.StringVar(
+        value="Select destinations and actions, then click Apply actions."
+    )
+    ctk.CTkLabel(
+        root,
+        textvariable=status_var,
+        font=ctk.CTkFont(size=10),
+        text_color=theme["muted"],
+        wraplength=560,
+        justify="center",
+    ).pack(pady=(8, 2))
 
     def _apply_actions() -> None:
+        if not rows:
+            messagebox.showinfo(
+                "Nothing to process",
+                "There are no files left in this batch.",
+                parent=root,
+            )
+            root.destroy()
+            return
+        apply_btn.configure(state="disabled")
+        later_btn.configure(state="disabled")
+        status_var.set("Applying actions...")
+        root.update_idletasks()
+        counters = {"moved": 0, "whitelisted": 0, "snoozed": 0, "skipped": 0}
+        errors = 0
         for filepath, dest_var, action_var in rows:
             if not os.path.exists(filepath):
+                counters["skipped"] += 1
                 continue
             action = action_var.get()
-            if action == "Move":
-                dest = dest_var.get()
-                if dest:
-                    move_file_fn(filepath, dest)
-                    rules.record_action(filepath, dest)
-                    counters["moved"] += 1
+            try:
+                if action == "Move":
+                    dest = dest_var.get()
+                    if dest:
+                        move_file_fn(filepath, dest)
+                        rules.record_action(filepath, dest)
+                        counters["moved"] += 1
+                    else:
+                        counters["skipped"] += 1
+                elif action == "Whitelist":
+                    if on_whitelist is not None:
+                        on_whitelist(os.path.basename(filepath))
+                    counters["whitelisted"] += 1
+                elif action == "Snooze":
+                    if on_snooze is not None:
+                        on_snooze(filepath)
+                    counters["snoozed"] += 1
                 else:
                     counters["skipped"] += 1
-            elif action == "Whitelist":
-                if on_whitelist is not None:
-                    on_whitelist(os.path.basename(filepath))
-                counters["whitelisted"] += 1
-            elif action == "Snooze":
-                if on_snooze is not None:
-                    on_snooze(filepath)
-                counters["snoozed"] += 1
-            else:
+            except Exception as exc:  # noqa: BLE001
+                errors += 1
                 counters["skipped"] += 1
+                logger.error(
+                    "Batch action failed for %s: %s",
+                    filepath,
+                    exc,
+                    exc_info=True,
+                )
+        summary = (
+            f"Moved {counters['moved']}, "
+            f"whitelisted {counters['whitelisted']}, "
+            f"snoozed {counters['snoozed']}, "
+            f"skipped {counters['skipped']}"
+        )
+        if errors:
+            summary = f"{summary}, errors {errors}"
+        status_var.set(f"Batch complete. {summary}.")
+        root.update_idletasks()
         logger.info(
-            "Batch applied: moved=%d, whitelisted=%d, snoozed=%d, skipped=%d",
+            "Batch applied: moved=%d, whitelisted=%d, snoozed=%d, skipped=%d, errors=%d",
             counters["moved"],
             counters["whitelisted"],
             counters["snoozed"],
             counters["skipped"],
+            errors,
         )
+        if config.get_setting("native_notifications", True):
+            fallback = config.get_setting("notification_fallback", "log-only")
+            notify(
+                "Batch actions applied",
+                summary,
+                fallback_strategy=fallback,
+            )
+        total_actions = (
+            counters["moved"] + counters["whitelisted"] + counters["snoozed"]
+        )
+        if errors:
+            messagebox.showwarning(
+                "Batch completed with errors",
+                f"{summary}.\n\nSome actions failed. Check the log for details.",
+                parent=root,
+            )
+        elif total_actions == 0:
+            messagebox.showwarning(
+                "No actions applied",
+                "No actions were applied. Check that destinations are set and files still exist.",
+                parent=root,
+            )
         root.destroy()
 
     def _later() -> None:
@@ -479,21 +571,23 @@ def show_batch_list(
 
     btn_frame = ctk.CTkFrame(root, fg_color="transparent")
     btn_frame.pack(pady=12)
-    ctk.CTkButton(
+    apply_btn = ctk.CTkButton(
         btn_frame, text="Apply actions",
         fg_color=theme["accent"], text_color="#1e1e2e",
         hover_color=theme["btn_active"],
         font=ctk.CTkFont(size=11, weight="bold"),
         corner_radius=8,
         command=_apply_actions,
-    ).pack(side="left", padx=6)
-    ctk.CTkButton(
+    )
+    apply_btn.pack(side="left", padx=6)
+    later_btn = ctk.CTkButton(
         btn_frame, text="Later",
         fg_color=theme["btn_bg"], text_color=theme["btn_fg"],
         hover_color=theme["muted"],
         font=ctk.CTkFont(size=11),
         corner_radius=8,
         command=_later,
-    ).pack(side="left", padx=6)
+    )
+    later_btn.pack(side="left", padx=6)
 
     root.mainloop()

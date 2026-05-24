@@ -1161,6 +1161,16 @@ class App:
                 self._batch_open_timer.cancel()
             self._batch_open_timer = None
         self.tray.set_pending(False)
+        if not queue:
+            logger.info("Sort pending requested, but no queued files remain.")
+            if self.config.get_setting("native_notifications", True):
+                fallback = self.config.get_setting("notification_fallback", "log-only")
+                notify(
+                    "No pending files",
+                    "You're all caught up.",
+                    fallback_strategy=fallback,
+                )
+            return
 
         style = self.config.get_setting("batch_mode_style", "batch-list")
         if style == "batch-list" and queue:
