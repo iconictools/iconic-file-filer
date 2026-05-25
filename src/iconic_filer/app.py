@@ -1092,15 +1092,19 @@ class App:
                 logger.warning("Could not rename to sorted name: %s", exc)
 
     def _run_ui(self, action: Callable[[], None], label: str) -> None:
-        """Run a UI action in a background thread."""
+        """Run a UI action, preferring the main thread when available."""
         def _wrapped() -> None:
             try:
                 action()
             except Exception:
                 logger.error("UI action failed: %s", label, exc_info=True)
 
-        if threading.current_thread() != threading.main_thread():
-            logger.debug("UI action requested off main thread: %s", label)
+        if threading.current_thread() == threading.main_thread():
+            logger.debug("UI action running on main thread: %s", label)
+            _wrapped()
+            return
+
+        logger.debug("UI action requested off main thread: %s", label)
         thread = threading.Thread(
             target=_wrapped,
             daemon=True,
