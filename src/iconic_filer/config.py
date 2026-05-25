@@ -49,7 +49,7 @@ _DEFAULT_CONFIG: dict[str, Any] = {
         # Minutes to snooze a file before re-prompting (default 30; set to 0 to disable)
         "snooze_minutes": 30,
         "batch_mode": False,
-        "batch_mode_style": "batch-list",
+        "batch_mode_style": "one-by-one",
         "prompt_delay_seconds": 3.0,
         "theme": "dark",
         # Pre-check "Always send .ext files here" in the sort prompt
@@ -152,6 +152,13 @@ class Config:
                 migrated = True
         if migrated:
             logger.info("Migrated monitored_folders to per-folder dict format.")
+
+        settings = self._data.setdefault("global_settings", {})
+        if settings.get("batch_mode_style") == "batch-list":
+            settings["batch_mode_style"] = "file-list"
+            migrated = True
+
+        if migrated:
             self.save()
 
     def save(self) -> None:

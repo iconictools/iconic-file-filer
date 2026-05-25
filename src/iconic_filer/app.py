@@ -10,13 +10,14 @@ import shutil
 import sys
 import threading
 import time
+from typing import Callable
 
 from iconic_filer.achievements import Achievements
 from iconic_filer.classifier import suggest_destinations
 from iconic_filer.config import Config
 from iconic_filer.conflict_ui import resolve_conflict
 from iconic_filer.constants import DEFAULT_UNSORTED_DIR
-from iconic_filer.dashboard_ui import show_batch_list, show_dashboard
+from iconic_filer.dashboard_ui import show_dashboard, show_file_list
 from iconic_filer.duplicate import find_duplicate
 from iconic_filer.history import History
 from iconic_filer.ipc import IPCServer
@@ -131,7 +132,7 @@ class App:
             on_open_manual=self._show_manual,
             on_add_folder=self._show_folder_setup,
             on_rescan=self._trigger_rescan,
-            on_process_pending=self._process_batch_queue,
+            on_process_pending=self._show_file_list,
             on_quit=self._quit,
         )
         self._ipc_server = IPCServer(on_command=self._handle_ipc_command)
@@ -156,7 +157,7 @@ class App:
         # First-run setup if no monitored folders
         first_run = not bool(self.config.monitored_folders)
         if first_run:
-            wizard = SetupWizard()
+            wizard = SetupWizard(theme=self.config.get_setting("theme", "dark"))
             folders = wizard.run()
             if not folders:
                 logger.info("No folders configured -- exiting.")
@@ -170,12 +171,7 @@ class App:
             )
             self.config.set_setting("startup_welcome_seen", True)
             if action == "setup":
-                SettingsDialog(
-                    self.config,
-                    initial_tab="Folders",
-                    on_open_sorting_rules=self._show_rules,
-                    on_delete_user_data=self._delete_all_user_data,
-                ).show()
+                self._run_setup_wizard()
             elif action == "manual":
                 show_manual(self.config.get_setting("theme", "dark"))
 
@@ -343,8 +339,16 @@ class App:
     # File event handling
     # ------------------------------------------------------------------
 
-    def _on_file_detected(self, filepath: str) -> None:
-        """Called by the watcher when a new/stable file or folder is detected."""
+    def _on_file_detected(self, filepath: str, force_prompt: bool = False) -> None:
+        """Called when a new/stable file or folder is detected.
+
+        Parameters
+        ----------
+        filepath:
+            Absolute path of the detected file/folder.
+        force_prompt:
+            When True, bypasses queueing and always shows the prompt immediately.
+        """
         logger.info("Detected: %s", filepath)
 
         # Skip files that live inside a configured destination folder.
@@ -407,7 +411,7 @@ class App:
         destinations = self.config.get_folder_destinations(parent_monitored)
         if not destinations:
             logger.debug("No destinations configured for %s", filepath)
-            return
+            # Continue so the prompt can offer to add/create destinations.
 
         # Merge global and per-folder extension maps (per-folder takes priority)
         folder_ext_map = self.config.get_folder_extension_map(parent_monitored)
@@ -428,8 +432,8 @@ class App:
             filepath, destinations, merged_ext_map
         )
 
-        style = self.config.get_setting("batch_mode_style", "batch-list")
-        if style == "batch-list":
+        style = self.config.get_setting("batch_mode_style", "one-by-one")
+        if style == "file-list" and not force_prompt:
             with self._lock:
                 if filepath not in self._batch_queue:
                     self._batch_queue.append(filepath)
@@ -475,6 +479,7 @@ class App:
             history=self.history,
             on_snooze=_on_snooze,
             on_save_destination=_on_save_destination,
+            on_delete=self._delete_item,
             always_rule_default=self.config.get_setting("prompt_always_rule", False),
             auto_accept_seconds=auto_accept_secs,
         )
@@ -538,6 +543,31 @@ class App:
     # ------------------------------------------------------------------
     # File operations
     # ------------------------------------------------------------------
+
+    def _delete_item(self, path: str) -> None:
+        """Delete a file or folder from disk."""
+        try:
+            if os.path.isdir(path):
+                shutil.rmtree(path)
+            else:
+                os.remove(path)
+            logger.info("Deleted %s", path)
+            if self.config.get_setting("native_notifications", True):
+                fallback = self.config.get_setting("notification_fallback", "log-only")
+                notify(
+                    "Item deleted",
+                    os.path.basename(path) or path,
+                    fallback_strategy=fallback,
+                )
+        except OSError as exc:
+            logger.error("Failed to delete %s: %s", path, exc)
+            if self.config.get_setting("native_notifications", True):
+                fallback = self.config.get_setting("notification_fallback", "log-only")
+                notify(
+                    "Delete failed",
+                    f"{os.path.basename(path) or path}: {exc}",
+                    fallback_strategy=fallback,
+                )
 
     def _move_file(self, src: str, dest_dir: str, source_folder: str | None = None) -> None:
         """Move *src* (file or folder) into *dest_dir*, recording the action.
@@ -723,15 +753,10 @@ class App:
 
         def _run() -> None:
             try:
-                show_batch_list(
-                    self.config,
-                    self.rules,
-                    self.watcher,
+                show_file_list(
                     queue,
                     theme_name,
-                    self._move_file,
-                    on_whitelist=self.config.add_to_whitelist,
-                    on_snooze=self._on_snooze_file,
+                    self._process_pending_selection,
                     on_defer=self._requeue_batch_items,
                 )
             finally:
@@ -1066,10 +1091,31 @@ class App:
             except OSError as exc:
                 logger.warning("Could not rename to sorted name: %s", exc)
 
+    def _run_ui(self, action: Callable[[], None], label: str) -> None:
+        """Run a UI action, preferring the main thread when available."""
+        def _wrapped() -> None:
+            try:
+                action()
+            except Exception:
+                logger.error("UI action failed: %s", label, exc_info=True)
+
+        if threading.current_thread() == threading.main_thread():
+            logger.debug("UI action running on main thread: %s", label)
+            _wrapped()
+            return
+
+        logger.debug("UI action requested off main thread: %s", label)
+        thread = threading.Thread(
+            target=_wrapped,
+            daemon=True,
+            name=f"ui-{label.replace(' ', '-')}",
+        )
+        thread.start()
+
     def _show_settings(self) -> None:
         """Open the settings dialog."""
-        t = threading.Thread(
-            target=lambda: SettingsDialog(
+        self._run_ui(
+            lambda: SettingsDialog(
                 self.config,
                 on_open_sorting_rules=self._show_rules,
                 on_rescan=self._trigger_rescan,
@@ -1077,34 +1123,64 @@ class App:
                 on_folder_removed=self._on_settings_folder_removed,
                 on_delete_user_data=self._delete_all_user_data,
             ).show(),
-            daemon=True,
+            "settings",
         )
-        t.start()
 
     def _show_manual(self) -> None:
         """Open the in-app manual."""
         theme_name = self.config.get_setting("theme", "dark")
-        t = threading.Thread(
-            target=lambda: show_manual(theme_name),
-            daemon=True,
-        )
-        t.start()
+        self._run_ui(lambda: show_manual(theme_name), "manual")
 
     def _show_folder_setup(self) -> None:
         """Open folder setup (watched folders + destinations split view)."""
-        t = threading.Thread(
-            target=lambda: SettingsDialog(
-                self.config,
-                initial_tab="Folders",
-                on_open_sorting_rules=self._show_rules,
-                on_rescan=self._trigger_rescan,
-                on_folder_added=self._on_settings_folder_added,
-                on_folder_removed=self._on_settings_folder_removed,
-                on_delete_user_data=self._delete_all_user_data,
-            ).show(),
-            daemon=True,
+        self._run_ui(self._run_setup_wizard, "folder setup")
+
+    def _run_setup_wizard(self) -> None:
+        """Run the setup wizard and apply any changes."""
+        initial = {
+            folder: self.config.get_folder_destinations(folder)
+            for folder in self.config.monitored_folders
+        }
+        wizard = SetupWizard(
+            theme=self.config.get_setting("theme", "dark"),
+            initial_folders=initial or None,
         )
-        t.start()
+        folders = wizard.run()
+        if not folders:
+            return
+        self._apply_wizard_folders(folders)
+
+    def _apply_wizard_folders(self, folders: dict[str, list[str]]) -> None:
+        """Update monitored folders after a wizard run."""
+        def _norm(path: str) -> str:
+            return os.path.normcase(os.path.normpath(os.path.abspath(path)))
+
+        existing_map = {
+            _norm(folder): folder for folder in self.config.monitored_folders
+        }
+        incoming_map = {_norm(folder): folder for folder in folders}
+
+        for key, existing_folder in existing_map.items():
+            if key not in incoming_map:
+                self.config.remove_monitored_folder(existing_folder)
+                try:
+                    self.watcher.remove_folder(existing_folder)
+                except Exception as exc:
+                    logger.error("Cannot stop watching %s: %s", existing_folder, exc)
+
+        for key, folder in incoming_map.items():
+            dests = [os.path.abspath(d) for d in folders.get(folder, [])]
+            existing_folder = existing_map.get(key)
+            if existing_folder is None:
+                self.config.add_monitored_folder(folder, dests)
+                try:
+                    self.watcher.add_folder(folder)
+                except Exception as exc:
+                    logger.error("Cannot watch %s: %s", folder, exc)
+            else:
+                self.config.set_destinations(existing_folder, dests)
+
+        self._update_tray_monitored_count()
 
     def _on_settings_folder_added(self, folder: str) -> None:
         """Keep watcher and tray state in sync when Settings adds a watched folder."""
@@ -1124,32 +1200,72 @@ class App:
 
     def _show_rules(self) -> None:
         """Open the rule management dialog."""
-        t = threading.Thread(
-            target=lambda: RulesDialog(self.rules, self.config).show(),
-            daemon=True,
+        self._run_ui(
+            lambda: RulesDialog(self.rules, self.config).show(),
+            "sorting rules",
         )
-        t.start()
 
     def _show_dashboard(self) -> None:
         """Open the activity window."""
         theme_name = self.config.get_setting("theme", "dark")
-        t = threading.Thread(
-            target=show_dashboard,
-            args=(
-                self.config, self.history, self._batch_queue,
-                self._lock, self.watcher, theme_name, self._trigger_rescan,
+        self._run_ui(
+            lambda: show_dashboard(
+                self.config,
+                self.history,
+                self._batch_queue,
+                self._lock,
+                self.watcher,
+                theme_name,
+                self._trigger_rescan,
             ),
-            daemon=True,
+            "activity dashboard",
         )
-        t.start()
+
+    def _show_file_list(self) -> None:
+        """Open the pending file list window."""
+        with self._lock:
+            if self._batch_window_open:
+                return
+            queue = list(self._batch_queue)
+            self._batch_queue.clear()
+            if self._batch_open_timer is not None and self._batch_open_timer.is_alive():
+                self._batch_open_timer.cancel()
+            self._batch_open_timer = None
+        self.tray.set_pending(False)
+        if not queue:
+            logger.info("Pending list requested, but no queued files remain.")
+            if self.config.get_setting("native_notifications", True):
+                fallback = self.config.get_setting("notification_fallback", "log-only")
+                notify(
+                    "No pending files",
+                    "You're all caught up.",
+                    fallback_strategy=fallback,
+                )
+            return
+        with self._lock:
+            self._batch_window_open = True
+        theme_name = self.config.get_setting("theme", "dark")
+
+        def _run() -> None:
+            try:
+                show_file_list(
+                    queue,
+                    theme_name,
+                    self._process_pending_selection,
+                    on_defer=self._requeue_batch_items,
+                )
+            finally:
+                with self._lock:
+                    self._batch_window_open = False
+                    queued_count = len(self._batch_queue)
+                if queued_count:
+                    self.tray.set_pending(True, queued_count)
+                    self._schedule_batch_window()
+
+        self._run_ui(_run, "pending file list")
 
     def _process_batch_queue(self) -> None:
-        """Process all files queued during focus mode.
-
-        Respects the ``batch_mode_style`` setting (Q6.2):
-        - ``'one-by-one'``: process each file individually
-        - ``'batch-list'``: show a batch window
-        """
+        """Review files queued during focus mode."""
         with self._lock:
             if self._batch_window_open:
                 # A batch window is already visible; leave the queue untouched
@@ -1161,20 +1277,29 @@ class App:
                 self._batch_open_timer.cancel()
             self._batch_open_timer = None
         self.tray.set_pending(False)
+        if not queue:
+            logger.info("Sort pending requested, but no queued files remain.")
+            if self.config.get_setting("native_notifications", True):
+                fallback = self.config.get_setting("notification_fallback", "log-only")
+                notify(
+                    "No pending files",
+                    "You're all caught up.",
+                    fallback_strategy=fallback,
+                )
+            return
 
-        style = self.config.get_setting("batch_mode_style", "batch-list")
-        if style == "batch-list" and queue:
+        style = self.config.get_setting("batch_mode_style", "one-by-one")
+        if style == "file-list" and queue:
             with self._lock:
                 self._batch_window_open = True
             theme_name = self.config.get_setting("theme", "dark")
 
             def _run() -> None:
                 try:
-                    show_batch_list(
-                        self.config, self.rules, self.watcher, queue,
-                        theme_name, self._move_file,
-                        on_whitelist=self.config.add_to_whitelist,
-                        on_snooze=self._on_snooze_file,
+                    show_file_list(
+                        queue,
+                        theme_name,
+                        self._process_pending_selection,
                         on_defer=self._requeue_batch_items,
                     )
                 finally:
@@ -1192,6 +1317,14 @@ class App:
                     self._on_file_detected(filepath)
                 else:
                     logger.info("Skipped queued item that no longer exists: %s", filepath)
+
+    def _process_pending_selection(self, paths: list[str]) -> None:
+        """Send selected pending files back through the prompt flow."""
+        for filepath in paths:
+            if os.path.exists(filepath):
+                self._on_file_detected(filepath, force_prompt=True)
+            else:
+                logger.info("Skipped queued item that no longer exists: %s", filepath)
 
     def _delete_all_user_data(self) -> None:
         """Delete all user data from disk and terminate the running app."""

@@ -152,9 +152,9 @@ class TrayIcon:
             pystray.Menu.SEPARATOR,
             pystray.MenuItem(
                 lambda _: (
-                    f"Sort {self._pending_count} pending file{'s' if self._pending_count != 1 else ''}"
+                    f"Review {self._pending_count} pending file{'s' if self._pending_count != 1 else ''}"
                     if self._pending_count > 0
-                    else "Sort pending files"
+                    else "Review pending files"
                 ),
                 self._action(self._on_process_pending),
                 visible=lambda _: self._pending,

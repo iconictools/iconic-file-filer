@@ -892,12 +892,12 @@ def _build_system_tab(
                                                   padx=(0, 8), pady=3)
     row += 1
 
-    _section_lbl(f, "Batch Processing", t).grid(row=row, column=0, columnspan=2, sticky="w",
-                                                  padx=8, pady=(12, 4))
+    _section_lbl(f, "Pending Review", t).grid(row=row, column=0, columnspan=2, sticky="w",
+                                              padx=8, pady=(12, 4))
     row += 1
-    _lbl(f, "Batch mode style:", t).grid(row=row, column=0, sticky="w", padx=8, pady=3)
-    batch_var = tk.StringVar(value=cfg.get_setting("batch_mode_style", "batch-list"))
-    ctk.CTkOptionMenu(f, variable=batch_var, values=["one-by-one", "batch-list"],
+    _lbl(f, "Pending review style:", t).grid(row=row, column=0, sticky="w", padx=8, pady=3)
+    batch_var = tk.StringVar(value=cfg.get_setting("batch_mode_style", "one-by-one"))
+    ctk.CTkOptionMenu(f, variable=batch_var, values=["one-by-one", "file-list"],
                       font=ctk.CTkFont(size=10)).grid(row=row, column=1, sticky="ew",
                                                        padx=(0, 8), pady=3)
     row += 1
